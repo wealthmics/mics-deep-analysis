@@ -1,0 +1,32 @@
+name: ISIN diagnostic
+
+# A one-off check, run by hand from the Actions tab. Nothing is committed and nothing on
+# the site changes. It only prints what Yahoo returns.
+#
+# Why run it here at all: this runner is a datacentre IP, and so is Streamlit Cloud. So
+# whatever this job sees is close to what the deployed app will see. Running the same
+# script on your laptop answers a different question - whether the route works at all on
+# a residential connection. Both answers are useful, and if they disagree, that itself is
+# the finding: the route works but not from a hosted app.
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install what the diagnostic needs
+        run: pip install --upgrade requests yfinance
+
+      - name: Run the ISIN diagnostic
+        run: python isin_diagnostic.py
