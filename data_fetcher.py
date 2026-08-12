@@ -174,6 +174,13 @@ def fetch_universe_data(tickers=None, progress_callback=None) -> dict:
 # checked against an expected currency whenever the caller can supply one.
 
 ISIN_CACHE_PATH = os.path.join(CACHE_DIR, "isin_map.json")
+
+# Bump this whenever the resolution logic changes. Entries stored under an older version
+# are ignored and re-resolved, so a fix here reaches the app without anyone having to find
+# and delete a cache file - which is not something you can easily do on a hosted app.
+#   1: first version, compared currencies that Yahoo's search never returns
+#   2: verifies the venue through the exchange code instead
+ISIN_CACHE_VERSION = 2
 _ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 
 
@@ -239,8 +246,10 @@ def resolve_isin(isin: str, expect_currency: str = None, force_refresh: bool = F
         return {"error": f"{isin} is not shaped like an ISIN"}
 
     cache = _load_isin_cache()
-    if not force_refresh and isin in cache and "symbol" in cache[isin]:
-        return dict(cache[isin], note=cache[isin].get("note", "") + " (cached)")
+    hit = cache.get(isin)
+    if (not force_refresh and hit and "symbol" in hit
+            and hit.get("_v") == ISIN_CACHE_VERSION):
+        return dict(hit, note=(hit.get("note", "") + " (cached)"))
 
     quotes = []
     try:
@@ -259,7 +268,8 @@ def resolve_isin(isin: str, expect_currency: str = None, force_refresh: bool = F
                 if str(q.get("quoteType", "")).upper() in ("EQUITY", "ETF", "MUTUALFUND")
                 and q.get("symbol")]
     if not equities:
-        out = {"error": "Yahoo returned no security for this ISIN"}
+        out = {"error": "Yahoo returned no security for this ISIN",
+               "_v": ISIN_CACHE_VERSION}
         cache[isin] = out
         _save_isin_cache(cache)
         return out
@@ -305,7 +315,8 @@ def resolve_isin(isin: str, expect_currency: str = None, force_refresh: bool = F
            "exchange": chosen.get("exchDisp") or venue,
            "currency": resolved_ccy,
            "name": chosen.get("shortname") or chosen.get("longname"),
-           "note": note}
+           "note": note,
+           "_v": ISIN_CACHE_VERSION}
     cache[isin] = out
     _save_isin_cache(cache)
     return out
