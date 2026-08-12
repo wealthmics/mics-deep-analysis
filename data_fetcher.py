@@ -198,10 +198,41 @@ def looks_like_isin(text: str) -> bool:
     return bool(_ISIN_RE.match(str(text).strip().upper()))
 
 
+# Yahoo's search response carries an exchange code but no currency field, so a currency
+# comparison can never succeed. These map the codes we actually see back to a currency,
+# which is what makes a sanity check possible at all.
+EXCHANGE_CURRENCY = {
+    'NMS': 'USD', 'NGM': 'USD', 'NCM': 'USD', 'NYQ': 'USD', 'ASE': 'USD', 'BTS': 'USD',
+    'PCX': 'USD', 'PNK': 'USD', 'OTC': 'USD',
+    'EBS': 'CHF', 'GER': 'EUR', 'FRA': 'EUR', 'PAR': 'EUR', 'AMS': 'EUR', 'BRU': 'EUR',
+    'MIL': 'EUR', 'MCE': 'EUR', 'LIS': 'EUR', 'VIE': 'EUR', 'DUB': 'EUR', 'HEL': 'EUR',
+    'ATH': 'EUR', 'TAL': 'EUR', 'RIS': 'EUR', 'LIT': 'EUR',
+    'LSE': 'GBP', 'IOB': 'USD',
+    'STO': 'SEK', 'CPH': 'DKK', 'OSL': 'NOK', 'ICE': 'ISK',
+    'TOR': 'CAD', 'VAN': 'CAD', 'CNQ': 'CAD',
+    'JPX': 'JPY', 'HKG': 'HKD', 'TAI': 'TWD', 'TWO': 'TWD', 'KSC': 'KRW', 'KOE': 'KRW',
+    'NSI': 'INR', 'BSE': 'INR', 'SES': 'SGD', 'KLS': 'MYR', 'JKT': 'IDR', 'SET': 'THB',
+    'PHS': 'PHP', 'HSX': 'VND', 'SHH': 'CNY', 'SHZ': 'CNY',
+    'ASX': 'AUD', 'NZE': 'NZD',
+    'SAO': 'BRL', 'MEX': 'MXN', 'SGO': 'CLP', 'BUE': 'ARS', 'LIM': 'PEN',
+    'JNB': 'ZAR', 'TLV': 'ILS', 'IST': 'TRY', 'WSE': 'PLN', 'SAU': 'SAR', 'DOH': 'QAR',
+    'PRA': 'CZK', 'BUD': 'HUF', 'CAI': 'EGP',
+}
+# a US over-the-counter venue holding a foreign company is the classic ADR signature
+US_OTC = {'PNK', 'OTC', 'IOB'}
+
+
 def resolve_isin(isin: str, expect_currency: str = None, force_refresh: bool = False) -> dict:
     """ISIN -> {'symbol', 'exchange', 'currency', 'name', 'note'} or {'error': ...}.
 
-    Results are cached to disk permanently, because an ISIN's Yahoo symbol does not change.
+    Cached to disk permanently, because an ISIN's Yahoo symbol does not change.
+
+    A note on the ADR question. An ADR carries its own ISIN, normally a US one, so a
+    single ISIN almost always maps to exactly one Yahoo symbol - the diagnostic returned
+    count:1 for every ISIN tested, including Nestle, where the Swiss line came back and
+    the ADR did not. So this no longer warns on every lookup. It warns only when the
+    resolved venue genuinely disagrees with what the screener expected, which in practice
+    means a foreign company resolving onto a US over-the-counter desk.
     """
     isin = str(isin).strip().upper()
     if not looks_like_isin(isin):
@@ -212,7 +243,6 @@ def resolve_isin(isin: str, expect_currency: str = None, force_refresh: bool = F
         return dict(cache[isin], note=cache[isin].get("note", "") + " (cached)")
 
     quotes = []
-    # newer yfinance ships its own search wrapper; fall back to the raw endpoint
     try:
         quotes = list(getattr(yf, "Search")(isin, max_results=8).quotes or [])
     except Exception:
@@ -234,22 +264,46 @@ def resolve_isin(isin: str, expect_currency: str = None, force_refresh: bool = F
         _save_isin_cache(cache)
         return out
 
-    chosen, note = equities[0], "first match from Yahoo search"
+    def ccy_of(quote):
+        """The currency, from the response if present, otherwise from the venue code."""
+        direct = quote.get("currency")
+        if direct:
+            return str(direct).upper()
+        return EXCHANGE_CURRENCY.get(str(quote.get("exchange", "")).upper())
+
+    want = None
     if expect_currency:
         want = str(expect_currency).upper()
         want = {"GBX": "GBP", "ZAC": "ZAR", "ILA": "ILS"}.get(want, want)
-        same = [q for q in equities
-                if str(q.get("currency", "")).upper() == want]
-        if same:
-            chosen, note = same[0], f"matched on expected currency {want}"
-        else:
-            note = (f"no listing in {want} was offered, so this is Yahoo's most prominent "
-                    f"line and may be an ADR - check the currency before trusting "
-                    f"per-share figures")
+
+    chosen = equities[0]
+    if want:
+        match = [q for q in equities if ccy_of(q) == want]
+        if match:
+            chosen = match[0]
+
+    venue = str(chosen.get("exchange", "")).upper()
+    resolved_ccy = ccy_of(chosen)
+
+    if len(equities) == 1:
+        note = f"single match on {chosen.get('exchDisp') or venue}"
+    elif want and resolved_ccy == want:
+        note = f"picked the {want} listing out of {len(equities)} matches"
+    else:
+        note = f"first of {len(equities)} matches"
+
+    # the only case that deserves a warning
+    if want and venue in US_OTC and want != "USD":
+        note = (f"resolved onto a US over-the-counter venue while the screener expected "
+                f"{want}. This is very likely an ADR, so treat the per-share figures with "
+                f"care - the ratios are still comparable")
+    elif want and resolved_ccy and resolved_ccy != want:
+        note = (f"resolved to a {resolved_ccy} listing though the screener expected {want}. "
+                f"Ratios remain comparable, per-share figures are in {resolved_ccy}")
 
     out = {"symbol": chosen.get("symbol"),
-           "exchange": chosen.get("exchDisp") or chosen.get("exchange"),
-           "currency": chosen.get("currency"),
+           "exchange": chosen.get("exchDisp") or venue,
+           "currency": resolved_ccy,
            "name": chosen.get("shortname") or chosen.get("longname"),
            "note": note}
     cache[isin] = out

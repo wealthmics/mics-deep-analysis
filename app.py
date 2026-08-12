@@ -132,7 +132,8 @@ if (_link_ticker or _link_isin) and _link_key != st.session_state.get("_last_dee
             _symbol = _res["symbol"]
             _msg = (f"**{_link_isin}** resolved to **{_symbol}** "
                     f"({_res.get('exchange')}, {_res.get('currency')}) - {_res.get('note')}")
-            if "may be an ADR" in (_res.get("note") or ""):
+            if "ADR" in (_res.get("note") or "") or "though the screener expected" in \
+                    (_res.get("note") or ""):
                 st.warning(_msg)
             else:
                 st.caption(_msg)
