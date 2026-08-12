@@ -1,0 +1,16 @@
+# Streamlit Cloud installs from this file. Keep it in the repo root next to app.py.
+
+streamlit>=1.30.0          # query_params, used for the ?isin= deep link from the screener
+yfinance>=0.2.40           # statements, prices and the ISIN search endpoint
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.15.0             # charts in the audit view
+scipy>=1.10.0              # linregress, used by the momentum and risk block
+requests>=2.31.0           # the browser-headed session in data_fetcher.get_session
+
+# Note on yfinance versions. Around 0.2.5x the library moved from requests to curl_cffi
+# for its own transport, and a plain requests Session passed into yf.Ticker can be
+# rejected. data_fetcher already tries the session and falls back without it, so both old
+# and new versions work. If you ever want to pin a version that is known good on this
+# code, replace the line above with an exact pin, for example:
+#   yfinance==0.2.65
