@@ -360,7 +360,13 @@ CSS = f"""
 <style>
   /* the whole page runs on one fixed palette, whatever theme Streamlit is set to */
   .stApp {{ background:{CANVAS}; }}
-  .block-container {{ padding-top:1.2rem; padding-bottom:3rem; max-width:1360px; }}
+  .block-container {{ padding-top:0.45rem; padding-bottom:3rem; max-width:1360px; }}
+
+  /* compact price-range selector placed beside the price chart */
+  div[data-testid="stRadio"] {{ margin:0 !important; padding:0 !important; }}
+  div[data-testid="stRadio"] > label {{ display:none !important; }}
+  div[data-testid="stRadio"] div[role="radiogroup"] {{ gap:4px !important; margin:0 0 10px 0 !important; padding:0 !important; }}
+  div[data-testid="stRadio"] div[role="radiogroup"] label {{ margin:0 !important; padding:3px 9px !important; }}
   .stApp, .stApp p, .stApp li, .stApp span, .stApp div, .stApp label {{ color:{INK}; }}
   .stApp h1, .stApp h2, .stApp h3 {{ color:{INK}; letter-spacing:-0.01em; }}
 
@@ -507,23 +513,37 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
     hist = (yf_data or {}).get('history')
     stats = (sector_stats or {}).get((tv or {}).get('gics')) or {}
 
-    # range selector sits above the page so a change reruns and redraws the chart
+    # The range selector is rendered between the sector card and the price card.
+    # Keep its value in session state so the page can be built in two HTML chunks without
+    # putting the Streamlit widget at the very top of the page.
     span_label = '1Y'
-    close = ma50 = ma200 = None
+    available = ['1Y']
+    default = 0
+    full = None
+    full_ma50 = None
+    full_ma200 = None
     if hist is not None and 'Close' in hist and len(hist) > 5:
         available = [k for k, n in SPANS.items() if n is None or len(hist) >= n * 0.6]
         default = available.index('1Y') if '1Y' in available else len(available) - 1
-        span_label = st.radio('Price history range', available, index=default,
-                              horizontal=True, key='span')
+        saved_span = st.session_state.get('span', available[default])
+        span_label = saved_span if saved_span in available else available[default]
+
         full = hist['Close'].dropna()
         # averages are computed on the full series and then sliced, so a short window still
         # carries a correct 200 day line rather than a truncated one
         full_ma50 = full.rolling(50).mean()
         full_ma200 = full.rolling(200).mean()
-        n = SPANS[span_label]
-        close = full if n is None else full.tail(n)
-        ma50 = full_ma50.reindex(close.index)
-        ma200 = full_ma200.reindex(close.index)
+
+    def chart_data(selected_span):
+        if full is None:
+            return None, None, None
+        n = SPANS[selected_span]
+        close_ = full if n is None else full.tail(n)
+        ma50_ = full_ma50.reindex(close_.index)
+        ma200_ = full_ma200.reindex(close_.index)
+        return close_, ma50_, ma200_
+
+    close, ma50, ma200 = chart_data(span_label)
 
     risk = price_risk(hist)
     # a second beta over five years, now that the full history is available
@@ -534,11 +554,40 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
 
     lede = st.session_state.get('lede', '')
 
-    html = pg.build(tv or {}, isin, yf_data, stats, forensics, resolution, risk,
-                    dupont(fin, bs), *quality_of_earnings(fin, cf),
-                    capital_allocation(cf), per_share_growth(fin, bs),
-                    span_label, close, ma50, ma200, lede)
-    st.markdown(html, unsafe_allow_html=True)
+    def build_html(selected_span):
+        close_, ma50_, ma200_ = chart_data(selected_span)
+        return pg.build(tv or {}, isin, yf_data, stats, forensics, resolution, risk,
+                        dupont(fin, bs), *quality_of_earnings(fin, cf),
+                        capital_allocation(cf), per_share_growth(fin, bs),
+                        selected_span, close_, ma50_, ma200_, lede)
+
+    html = build_html(span_label)
+
+    # page.py deliberately emits the price card as a normal HTML card. Split immediately
+    # before that card so the native Streamlit radio is visually located beside the chart
+    # section instead of at the top of the application.
+    price_marker = '<div class="card"><span class="src y">Yahoo, daily</span><h2>Price and drawdown</h2>'
+    if price_marker in html and hist is not None and 'Close' in hist and len(hist) > 5:
+        before, after = html.split(price_marker, 1)
+        st.markdown(before, unsafe_allow_html=True)
+
+        selected_span = st.radio(
+            'Price history range',
+            available,
+            index=available.index(span_label),
+            horizontal=True,
+            key='span',
+            label_visibility='collapsed'
+        )
+
+        if selected_span != span_label:
+            span_label = selected_span
+            html = build_html(span_label)
+            before, after = html.split(price_marker, 1)
+
+        st.markdown(after, unsafe_allow_html=True)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
 
     with st.expander('Write the reading that appears at the foot of this page'):
         st.text_area('One paragraph, in your own words. The three columns below it are '
