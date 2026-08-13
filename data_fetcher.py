@@ -109,7 +109,14 @@ def get_ticker_data(ticker_symbol: str, force_refresh: bool = False) -> dict:
     data['cashflow'] = grab('cashflow', lambda: ticker.cashflow)
     data['quarterly_financials'] = grab('quarterly_financials',
                                         lambda: ticker.quarterly_financials)
-    data['history'] = grab('history', lambda: ticker.history(period="2y", auto_adjust=True))
+    # the full history Yahoo holds, not two years. The drawdown that matters is usually
+    # older than any two year window - First Solar fell 91% from its 2008 peak, and a 2y
+    # chart hides that completely. Fetched once and cached, so the cost is paid once.
+    data['history'] = grab('history', lambda: ticker.history(period="max",
+                                                             auto_adjust=True))
+    if data['history'] is None:
+        data['history'] = grab('history_5y',
+                               lambda: ticker.history(period="5y", auto_adjust=True))
     if data['history'] is None:
         data['history'] = grab('history_1y',
                                lambda: ticker.history(period="1y", auto_adjust=True))

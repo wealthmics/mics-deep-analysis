@@ -221,22 +221,30 @@ def quality_of_earnings(fin, cf):
     for i, label in enumerate(labels):
         n = ni[i] if i < len(ni) else None
         c = cfo[i] if i < len(cfo) else None
-        rows.append({'period': label, 'net_income': n, 'cfo': c,
-                     'cfo_to_ni': round(c / n, 2) if (n and c is not None and n != 0) else None})
+        # a ratio against a loss is meaningless: -40m of profit and 200m of cash gives
+        # -5.00x, which reads as terrible when it is in fact the opposite. Those years are
+        # left blank and excluded from the average.
+        ratio = round(c / n, 2) if (n is not None and n > 0 and c is not None) else None
+        rows.append({'period': label, 'net_income': n, 'cfo': c, 'cfo_to_ni': ratio})
     usable = [r for r in rows if r['cfo_to_ni'] is not None]
     verdict = None
     if len(usable) >= 2:
         avg = sum(r['cfo_to_ni'] for r in usable) / len(usable)
+        loss_years = sum(1 for r in rows if (r.get('net_income') or 0) <= 0)
+        caveat = (f' The {loss_years} loss year(s) are excluded, since a ratio against a '
+                  f'loss carries no meaning.' if loss_years else '')
         if avg >= 1.1:
-            verdict = (f'Cash conversion averages {avg:.2f}x reported profit over '
-                       f'{len(usable)} years. Earnings are backed by cash.')
+            verdict = (f'Cash conversion averages <b>{avg:.2f}x</b> reported profit over '
+                       f'{len(usable)} profitable years. Earnings are backed by cash.'
+                       + caveat)
         elif avg >= 0.9:
-            verdict = (f'Cash conversion averages {avg:.2f}x reported profit. Broadly in '
-                       f'line, nothing to flag.')
+            verdict = (f'Cash conversion averages <b>{avg:.2f}x</b> reported profit. Broadly '
+                       f'in line, nothing to flag.' + caveat)
         else:
-            verdict = (f'Cash conversion averages only {avg:.2f}x reported profit over '
-                       f'{len(usable)} years. Profit is running ahead of cash, which is '
-                       f'worth understanding before anything else on this page.')
+            verdict = (f'Cash conversion averages only <b>{avg:.2f}x</b> reported profit over '
+                       f'{len(usable)} profitable years. Profit is running ahead of cash, '
+                       f'which is worth understanding before anything else on this '
+                       f'page.' + caveat)
     return rows, verdict
 
 
@@ -326,36 +334,107 @@ def price_risk(hist, bench=None):
 
 
 # ---------------------------------------------------------------- presentation ----------
-NAVY, GOLD, GREEN, RED, GREY = '#1f3864', '#bf8f00', '#1f6b3b', '#a01b2b', '#6b7280'
+# ---------------------------------------------------------------- design system ---------
+# Built on the conventions institutional tearsheets settled on long ago, for reasons that
+# hold up: one typeface, three sizes, colour reserved for judgement rather than decoration,
+# numbers right-aligned on a tabular figure so columns line up, and hairline rules instead
+# of boxes so the eye follows content rather than borders.
+#
+# The palette is fixed rather than inherited from the Streamlit theme. The previous version
+# drew white cards on whatever background the theme supplied, which on dark mode produced
+# exactly the mismatch that made the page hard to read.
 
-CSS = """
+INK      = '#111827'   # primary text
+INK_SOFT = '#4b5563'   # secondary text
+INK_MUTE = '#8b93a1'   # labels and meta
+LINE     = '#e5e7eb'   # hairlines
+SURFACE  = '#ffffff'
+CANVAS   = '#f7f8fa'
+NAVY     = '#16325c'
+GOLD     = '#a8791a'
+GOOD     = '#15803d'
+WARN     = '#b45309'
+BAD      = '#b91c1c'
+
+CSS = f"""
 <style>
-  .dv-head {background:linear-gradient(90deg,#1f3864,#2e5c8a); color:#fff;
-            padding:16px 20px; border-radius:8px; margin-bottom:6px;}
-  .dv-head h1 {margin:0; font-size:24px; font-weight:650; color:#fff;}
-  .dv-head .sub {opacity:.85; font-size:13px; margin-top:4px;}
-  .dv-pill {display:inline-block; background:rgba(255,255,255,.15); border-radius:10px;
-            padding:2px 9px; font-size:11px; margin-right:6px;}
-  .dv-card {border:1px solid #d8dee9; border-left:4px solid #1f3864; border-radius:6px;
-            padding:10px 13px; background:#fff; height:100%;}
-  .dv-card .k {font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#6b7280;}
-  .dv-card .v {font-size:22px; font-weight:650; color:#1f3864; line-height:1.25;}
-  .dv-card .m {font-size:11px; color:#6b7280; margin-top:2px;}
-  .dv-thin {opacity:.55;}
-  .dv-src  {display:inline-block; font-size:10px; padding:1px 6px; border-radius:8px;
-            background:#eef2f8; color:#1f3864; border:1px solid #d8dee9;}
-  .dv-src.yh {background:#f4efe0; color:#7a5c00; border-color:#e3d7ae;}
-  .dv-sec {font-size:12px; text-transform:uppercase; letter-spacing:.06em;
-           color:#1f3864; font-weight:700; border-bottom:2px solid #1f3864;
-           padding-bottom:4px; margin:22px 0 10px;}
-  .dv-note {font-size:11.5px; color:#6b7280; line-height:1.55;}
+  /* the whole page runs on one fixed palette, whatever theme Streamlit is set to */
+  .stApp {{ background:{CANVAS}; }}
+  .block-container {{ padding-top:1.2rem; padding-bottom:3rem; max-width:1360px; }}
+  .stApp, .stApp p, .stApp li, .stApp span, .stApp div, .stApp label {{ color:{INK}; }}
+  .stApp h1, .stApp h2, .stApp h3 {{ color:{INK}; letter-spacing:-0.01em; }}
+
+  /* numbers use tabular figures so digits align down a column */
+  .num {{ font-variant-numeric:tabular-nums; font-feature-settings:'tnum'; }}
+
+  /* masthead */
+  .dv-mast {{ background:{SURFACE}; border:1px solid {LINE}; border-radius:10px;
+              padding:20px 24px 18px; margin-bottom:14px; }}
+  .dv-mast .eyebrow {{ font-size:11px; font-weight:600; letter-spacing:.09em;
+                       text-transform:uppercase; color:{GOLD}; margin-bottom:6px; }}
+  .dv-mast h1 {{ margin:0; font-size:27px; font-weight:640; line-height:1.15; }}
+  .dv-mast .facts {{ margin-top:10px; font-size:12.5px; color:{INK_SOFT}; }}
+  .dv-mast .facts b {{ color:{INK}; font-weight:600; }}
+  .dv-mast .facts .dot {{ color:{INK_MUTE}; margin:0 8px; }}
+
+  /* the price block sits right of the name, right-aligned like a quote screen */
+  .dv-quote {{ text-align:right; }}
+  .dv-quote .px {{ font-size:30px; font-weight:640; line-height:1.1;
+                   font-variant-numeric:tabular-nums; }}
+  .dv-quote .ccy {{ font-size:12px; color:{INK_MUTE}; margin-left:4px; font-weight:500; }}
+  .dv-quote .chg {{ font-size:13px; font-weight:600; margin-top:2px;
+                    font-variant-numeric:tabular-nums; }}
+
+  /* section rule */
+  .dv-sec {{ display:flex; align-items:baseline; gap:12px; margin:30px 0 12px; }}
+  .dv-sec .t {{ font-size:12px; font-weight:700; letter-spacing:.09em;
+                text-transform:uppercase; color:{NAVY}; white-space:nowrap; }}
+  .dv-sec .r {{ flex:1; height:1px; background:{LINE}; }}
+  .dv-sec .n {{ font-size:11px; color:{INK_MUTE}; white-space:nowrap; }}
+
+  /* metric tile: fixed height so a row of them aligns on every line */
+  .dv-tile {{ background:{SURFACE}; border:1px solid {LINE}; border-radius:8px;
+              padding:13px 15px 12px; height:118px; display:flex;
+              flex-direction:column; justify-content:space-between; }}
+  .dv-tile .k {{ font-size:10.5px; font-weight:600; letter-spacing:.06em;
+                 text-transform:uppercase; color:{INK_MUTE}; line-height:1.3; }}
+  .dv-tile .v {{ font-size:24px; font-weight:640; line-height:1.05; margin:6px 0 0;
+                 font-variant-numeric:tabular-nums; }}
+  .dv-tile .m {{ font-size:10.5px; color:{INK_MUTE}; line-height:1.4; }}
+  .dv-tile.good {{ box-shadow:inset 3px 0 0 {GOOD}; }}
+  .dv-tile.warn {{ box-shadow:inset 3px 0 0 {WARN}; }}
+  .dv-tile.bad  {{ box-shadow:inset 3px 0 0 {BAD}; }}
+  .dv-tile.flat {{ box-shadow:inset 3px 0 0 {LINE}; }}
+  .dv-tile.off  {{ background:#fbfbfc; border-style:dashed; }}
+  .dv-tile.off .v {{ color:{INK_MUTE}; font-weight:500; }}
+
+  .pos {{ color:{GOOD}; }} .neg {{ color:{BAD}; }} .neu {{ color:{INK_SOFT}; }}
+
+  /* provenance chips, small and quiet */
+  .chip {{ display:inline-block; font-size:9.5px; font-weight:600; letter-spacing:.04em;
+           text-transform:uppercase; padding:2px 7px; border-radius:4px;
+           background:#eef2f7; color:{NAVY}; }}
+  .chip.yh {{ background:#f6f1e6; color:{GOLD}; }}
+
+  /* a read-out line under a block: the sentence that says what the numbers mean */
+  .dv-read {{ background:{SURFACE}; border:1px solid {LINE}; border-left:3px solid {NAVY};
+              border-radius:6px; padding:11px 14px; font-size:12.5px; color:{INK_SOFT};
+              line-height:1.6; margin-top:10px; }}
+  .dv-read b {{ color:{INK}; }}
+  .dv-note {{ font-size:11.5px; color:{INK_MUTE}; line-height:1.6; margin-top:8px; }}
+
+  /* tables */
+  .stDataFrame {{ border:1px solid {LINE}; border-radius:8px; }}
+  div[data-testid="stExpander"] {{ border:1px solid {LINE}; border-radius:8px;
+                                   background:{SURFACE}; }}
+  div[data-testid="stExpander"] summary {{ font-size:12.5px; font-weight:600; }}
 </style>
 """
 
 
 def fmt(value, kind='num', dp=2):
     if value is None or (isinstance(value, float) and pd.isna(value)):
-        return '-'
+        return '–'
     if kind == 'pct':
         return f'{value:,.1f}%'
     if kind == 'x':
@@ -367,435 +446,107 @@ def fmt(value, kind='num', dp=2):
         return f'{value:,.0f}'
     if kind == 'int':
         return f'{value:,.0f}'
+    if kind == 'score9':
+        return f'{value:,.0f}<span style="font-size:14px;color:{INK_MUTE}"> / 9</span>'
     return f'{value:,.{dp}f}'
 
 
+def chip(source, period=None):
+    cls = 'chip yh' if source.lower().startswith('yahoo') else 'chip'
+    return f'<span class="{cls}">{source}{" · " + period if period else ""}</span>'
+
+
+# kept under the old names so the rest of the page needs no rewriting
 def badge(source, period=None):
-    cls = 'dv-src yh' if source.lower().startswith('yahoo') else 'dv-src'
-    text = source if not period else f'{source} · {period}'
-    return f'<span class="{cls}">{text}</span>'
+    return chip(source, period)
 
 
-def card(label, value, meta='', thin=False):
-    klass = 'dv-card dv-thin' if thin else 'dv-card'
-    return (f'<div class="{klass}"><div class="k">{label}</div>'
+def tile(label, value, meta='', tone='flat'):
+    """One metric. Fixed height, so a row of these lines up on every line of text."""
+    return (f'<div class="dv-tile {tone}"><div class="k">{label}</div>'
             f'<div class="v">{value}</div><div class="m">{meta}</div></div>')
 
 
-def section(title):
-    return f'<div class="dv-sec">{title}</div>'
+def card(label, value, meta='', thin=False):
+    return tile(label, value, meta, 'off' if thin else 'flat')
+
+
+def section(title, note=''):
+    return (f'<div class="dv-sec"><span class="t">{title}</span>'
+            f'<span class="r"></span><span class="n">{note}</span></div>')
+
+
+def read(text):
+    """The sentence that says what a block of numbers means."""
+    return f'<div class="dv-read">{text}</div>'
+
+
+def tone_from_band(band):
+    """Peer position to a tone, so colour always carries the same meaning."""
+    return {'best quartile': 'good', 'above median': 'good', 'better than median': 'good',
+            'below median': 'warn', 'below average': 'warn',
+            'worst quartile': 'bad'}.get(band, 'flat')
 
 
 # ---------------------------------------------------------------- the page --------------
+SPANS = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504, '5Y': 1260, '10Y': 2520, 'Max': None}
+
+
 def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
     """Draw the analysis page.
 
-    tv          the TradingView entry from stocks.json, the primary source
-    yf_data     what data_fetcher returned for the resolved Yahoo symbol
-    forensics   the scores financial_formulas produced, which TradingView does not publish
+    The page itself is one block of HTML built by page.build. Only the range selector is a
+    Streamlit widget, because it has to trigger a rerun; everything else is laid out in the
+    HTML so the result matches the design rather than Streamlit's default spacing.
     """
-    st.markdown(CSS, unsafe_allow_html=True)
-    periods = (tv or {}).get('_periods', {})
-    tvp = lambda k: periods.get(k)
+    import page as pg
 
     fin = (yf_data or {}).get('financials')
     bs = (yf_data or {}).get('balance_sheet')
     cf = (yf_data or {}).get('cashflow')
     hist = (yf_data or {}).get('history')
-    stats = (sector_stats or {}).get(tv.get('gics')) if tv else None
+    stats = (sector_stats or {}).get((tv or {}).get('gics')) or {}
 
-    # ---------------- identity ----------------
-    name = tv.get('name') if tv else (yf_data or {}).get('symbol', '')
-    pills = ''.join(f'<span class="dv-pill">{p}</span>' for p in [
-        tv.get('ticker') if tv else '',
-        isin or '',
-        tv.get('gics') if tv else '',
-        tv.get('country') if tv else '',
-        f"{tv.get('ccy')} {fmt(tv.get('price'))}" if tv and tv.get('price') else '',
-    ] if p)
-    st.markdown(
-        f'<div class="dv-head"><h1>{name}</h1><div class="sub">{pills}</div></div>',
-        unsafe_allow_html=True)
+    # range selector sits above the page so a change reruns and redraws the chart
+    span_label = '1Y'
+    close = ma50 = ma200 = None
+    if hist is not None and 'Close' in hist and len(hist) > 5:
+        available = [k for k, n in SPANS.items() if n is None or len(hist) >= n * 0.6]
+        default = available.index('1Y') if '1Y' in available else len(available) - 1
+        span_label = st.radio('Price history range', available, index=default,
+                              horizontal=True, key='span')
+        full = hist['Close'].dropna()
+        # averages are computed on the full series and then sliced, so a short window still
+        # carries a correct 200 day line rather than a truncated one
+        full_ma50 = full.rolling(50).mean()
+        full_ma200 = full.rolling(200).mean()
+        n = SPANS[span_label]
+        close = full if n is None else full.tail(n)
+        ma50 = full_ma50.reindex(close.index)
+        ma200 = full_ma200.reindex(close.index)
 
-    tv_date = (tv or {}).get('_as_of', 'unknown')
-    st.markdown(
-        f'{badge("TradingView", tv_date)} every ratio it publishes, so this page agrees '
-        f'with the screen that surfaced the name &nbsp; {badge("Yahoo", "live")} what '
-        f'TradingView does not publish: the business description, forensic scores, '
-        f'four-year statement trends, the return decomposition, cash-flow history, '
-        f'per-share growth, daily price risk and news.',
-        unsafe_allow_html=True)
-    if resolution and resolution.get('symbol'):
-        st.caption(f"Yahoo symbol {resolution['symbol']} · {resolution.get('exchange')} · "
-                   f"{resolution.get('currency')} — {resolution.get('note')}")
-
-    # ---------------- what the company actually does ----------------
-    info = (yf_data or {}).get('info') or {}
-    summary = info.get('longBusinessSummary')
-    if summary or info.get('industry'):
-        line = ' · '.join(str(x) for x in [info.get('sector'), info.get('industry'),
-                                           info.get('fullTimeEmployees') and
-                                           f"{info['fullTimeEmployees']:,} employees",
-                                           info.get('website')] if x)
-        st.markdown(section('The business'), unsafe_allow_html=True)
-        if line:
-            st.markdown(f'<div class="dv-note">{badge("Yahoo")} {line}</div>',
-                        unsafe_allow_html=True)
-        if summary:
-            with st.expander('Business description', expanded=True):
-                st.write(summary)
-
-    # ---------------- headline, all TradingView ----------------
-    st.markdown(section('Headline · TradingView'), unsafe_allow_html=True)
-    heads = [('mcap', 'Market cap', 'money'), ('pe', 'P/E', 'x'), ('roe', 'ROE', 'pct'),
-             ('op_margin', 'Operating margin', 'pct'), ('net_margin', 'Net margin', 'pct'),
-             ('debt_equity', 'Debt / equity', 'x')]
-    cols = st.columns(len(heads))
-    for col, (key, label, kind) in zip(cols, heads):
-        val = (tv or {}).get(key)
-        peer = percentile_of(val, stats, key)
-        meta = f'{tvp(key) or ""}'
-        if peer:
-            meta += (f' · sector median {fmt(peer["median"], kind)} · '
-                     f'<b>{peer["band"]}</b>')
-        col.markdown(card(label, fmt(val, kind), meta), unsafe_allow_html=True)
-
-    # ---------------- solvency, TradingView with the Yahoo forensics beside it ----------
-    st.markdown(section('Solvency and earnings integrity'), unsafe_allow_html=True)
-    gics = (tv or {}).get('gics')
-    financial_sector = gics in ('Financials', 'Real Estate')
-    c = st.columns(5)
-
-    if financial_sector:
-        c[0].markdown(card('Altman Z', 'n/a',
-                           'Neither Altman model applies to a bank, insurer or REIT '
-                           'balance sheet', thin=True), unsafe_allow_html=True)
-    else:
-        z = (tv or {}).get('altman_z')
-        band = ('distress' if z is not None and z < 1.8 else
-                'grey zone' if z is not None and z < 3 else 'safe' if z is not None else '')
-        c[0].markdown(card('Altman Z', fmt(z), f'TradingView · TTM · {band}'),
-                      unsafe_allow_html=True)
-
-    f = (tv or {}).get('piotroski_f')
-    c[1].markdown(card('Piotroski F', f'{f:.0f}/9' if f is not None else '-',
-                       'TradingView · TTM'), unsafe_allow_html=True)
-
-    for slot, key, label, note in (
-            (2, 'beneish', 'Beneish M', 'above -1.78 flags manipulation risk'),
-            (3, 'ohlson', 'Ohlson O', 'distress probability'),
-            (4, 'sloan', 'Sloan accruals', 'lower is cleaner')):
-        got = (forensics or {}).get(key) or {}
-        val, cov = got.get('score'), got.get('coverage')
-        if val is None:
-            why = got.get('details') or 'no Yahoo statements available'
-            if isinstance(why, dict):
-                why = 'inputs incomplete'
-            why = str(why)
-            c[slot].markdown(card(label, '-', f'Yahoo · {why[:90]}', thin=True),
-                             unsafe_allow_html=True)
-        else:
-            extra = f' · coverage {cov:.0f}%' if cov else ''
-            if key == 'ohlson' and got.get('as_pct'):
-                # Ohlson returns a probability as a fraction, so it needs scaling before
-                # it is printed as a percentage
-                shown = fmt(val * 100, 'pct')
-            else:
-                shown = fmt(val)
-            c[slot].markdown(card(label, shown, f'Yahoo · {note}{extra}'),
-                             unsafe_allow_html=True)
-
-    st.markdown('<div class="dv-note">Altman and Piotroski come from TradingView so they '
-                'match the screener that surfaced this name. The three beside them are not '
-                'published by TradingView and are computed here from Yahoo statements, so '
-                'they carry a coverage figure - a score built on partial inputs is worth '
-                'less than one built on complete inputs, and the page says which is '
-                'which.</div>', unsafe_allow_html=True)
-
-    # ---------------- what the market is paying, beyond the P/E ----------------
-    # TradingView publishes P/E and forward P/E and nothing else on valuation. These come
-    # off the Yahoo info block and are the multiples an analyst reaches for next.
-    extra_val = [
-        ('enterpriseToEbitda', 'EV / EBITDA', 'x'), ('priceToBook', 'Price / book', 'x'),
-        ('priceToSalesTrailing12Months', 'Price / sales', 'x'),
-        ('enterpriseToRevenue', 'EV / revenue', 'x'),
-        ('trailingPegRatio', 'PEG', 'x'),
-        ('dividendYield', 'Dividend yield', 'pct'),
-    ]
-    have = [(k, l, kind) for k, l, kind in extra_val if info.get(k) is not None]
-    if have:
-        st.markdown(section('Valuation beyond the P/E'), unsafe_allow_html=True)
-        cc = st.columns(len(have))
-        for col, (key, label, kind) in zip(cc, have):
-            val = info.get(key)
-            # Yahoo has reported dividend yield both as a fraction and as a percent across
-            # versions, so a value under 1 is read as a fraction
-            if key == 'dividendYield' and val is not None and val < 1:
-                val *= 100
-            col.markdown(card(label, fmt(val, kind), 'Yahoo · TTM'), unsafe_allow_html=True)
-        payout = info.get('payoutRatio')
-        if payout is not None:
-            st.markdown(f'<div class="dv-note">{badge("Yahoo")} Payout ratio '
-                        f'{payout*100:,.0f}% of earnings.</div>', unsafe_allow_html=True)
-
-    # ---------------- the analyst view, which TradingView does not export ----------------
-    target = info.get('targetMeanPrice')
-    n_analysts = info.get('numberOfAnalystOpinions')
-    if target or info.get('recommendationKey'):
-        st.markdown(section('The analyst view'), unsafe_allow_html=True)
-        a = st.columns(5)
-        px_now = info.get('currentPrice') or info.get('regularMarketPrice') or tv.get('price')
-        upside = ((target / px_now - 1) * 100) if (target and px_now) else None
-        a[0].markdown(card('Consensus', str(info.get('recommendationKey') or '-').replace('_', ' ').title(),
-                           f'{n_analysts or 0} analysts covering'), unsafe_allow_html=True)
-        a[1].markdown(card('Mean target', fmt(target), f'{tv.get("ccy") or ""}'),
-                      unsafe_allow_html=True)
-        a[2].markdown(card('Implied upside', fmt(upside, 'pct'), 'against the last price'),
-                      unsafe_allow_html=True)
-        a[3].markdown(card('Target low', fmt(info.get('targetLowPrice')), 'Yahoo'),
-                      unsafe_allow_html=True)
-        a[4].markdown(card('Target high', fmt(info.get('targetHighPrice')), 'Yahoo'),
-                      unsafe_allow_html=True)
-        if n_analysts is not None and n_analysts < 4:
-            st.markdown(f'<div class="dv-note">Only {n_analysts} analyst opinions sit behind '
-                        f'that target. A consensus of three is a coincidence, not a '
-                        f'consensus.</div>', unsafe_allow_html=True)
-
-    # ---------------- where the price sits, and who is short ----------------
-    lo, hi = info.get('fiftyTwoWeekLow'), info.get('fiftyTwoWeekHigh')
-    short_pct = info.get('shortPercentOfFloat')
-    if lo and hi:
-        st.markdown(section('Position and positioning'), unsafe_allow_html=True)
-        px_now = info.get('currentPrice') or info.get('regularMarketPrice') or tv.get('price')
-        pos = ((px_now - lo) / (hi - lo) * 100) if (px_now and hi > lo) else None
-        p = st.columns(5)
-        p[0].markdown(card('52-week range', f'{fmt(lo)} – {fmt(hi)}', 'Yahoo'),
-                      unsafe_allow_html=True)
-        p[1].markdown(card('Position in range', fmt(pos, 'pct'),
-                           '0% at the low, 100% at the high'), unsafe_allow_html=True)
-        p[2].markdown(card('Short interest', fmt(short_pct*100 if short_pct else None, 'pct'),
-                           'of free float' if short_pct else 'not reported'),
-                      unsafe_allow_html=True)
-        p[3].markdown(card('Held by institutions',
-                           fmt(info.get('heldPercentInstitutions', 0)*100
-                               if info.get('heldPercentInstitutions') else None, 'pct'),
-                           'Yahoo'), unsafe_allow_html=True)
-        p[4].markdown(card('Held by insiders',
-                           fmt(info.get('heldPercentInsiders', 0)*100
-                               if info.get('heldPercentInsiders') else None, 'pct'),
-                           'Yahoo'), unsafe_allow_html=True)
-        if short_pct and short_pct > 0.08:
-            st.markdown(f'<div class="dv-note">Short interest of {short_pct*100:.1f}% of '
-                        f'float is high. Someone has done work that reaches the opposite '
-                        f'conclusion, and it is worth knowing what before acting on '
-                        f'anything above.</div>', unsafe_allow_html=True)
-
-    # ---------------- DuPont ----------------
-    rows = dupont(fin, bs)
-    if rows:
-        st.markdown(section('What drives the return on equity'), unsafe_allow_html=True)
-        table = pd.DataFrame(rows).rename(columns={
-            'period': 'Period', 'net_margin_pct': 'Net margin %',
-            'asset_turnover': 'Asset turnover', 'equity_multiplier': 'Equity multiplier',
-            'roe_pct': 'ROE %'})
-        st.dataframe(table, use_container_width=True, hide_index=True)
-        last = rows[-1]
-        driver = ('operating margin' if last['net_margin_pct'] >= 10 else
-                  'asset turnover' if last['asset_turnover'] >= 1 else 'balance sheet leverage')
-        st.markdown(
-            f'<div class="dv-note">{badge("Yahoo", "annual")} ROE of '
-            f'{last["roe_pct"]:.1f}% = margin {last["net_margin_pct"]:.1f}% × turnover '
-            f'{last["asset_turnover"]:.2f} × leverage {last["equity_multiplier"]:.2f}. '
-            f'The dominant contributor is {driver}. A high ROE earned on leverage is a '
-            f'different proposition from the same ROE earned on margin, and the headline '
-            f'figure cannot separate them.</div>', unsafe_allow_html=True)
-
-    # ---------------- quality of earnings ----------------
-    qrows, verdict = quality_of_earnings(fin, cf)
-    if any(r['cfo_to_ni'] is not None for r in qrows):
-        st.markdown(section('Does the profit arrive as cash'), unsafe_allow_html=True)
-        q = pd.DataFrame([{'Period': r['period'],
-                           'Net income': fmt(r['net_income'], 'money'),
-                           'Operating cash flow': fmt(r['cfo'], 'money'),
-                           'CFO / net income': fmt(r['cfo_to_ni'], 'x')} for r in qrows])
-        st.dataframe(q, use_container_width=True, hide_index=True)
-        if verdict:
-            st.markdown(f'<div class="dv-note">{badge("Yahoo", "annual")} {verdict}</div>',
-                        unsafe_allow_html=True)
-
-    # ---------------- capital allocation ----------------
-    ca = capital_allocation(cf)
-    if ca.get('uses'):
-        st.markdown(section('Where the cash went'), unsafe_allow_html=True)
-        st.markdown(f'<div class="dv-note">{badge("Yahoo", "annual")} Cumulative operating '
-                    f'cash flow of <b>{fmt(ca["cumulative_cfo"], "money")}</b> over '
-                    f'{ca["years"]} years, {ca["period_from"]} to {ca["period_to"]}.</div>',
-                    unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame([{'Use of cash': u['use'],
-                                    'Amount': fmt(u['amount'], 'money'),
-                                    '% of operating cash flow': f'{u["pct_of_cfo"]}%'
-                                    if u['pct_of_cfo'] is not None else '-'}
-                                   for u in ca['uses']]),
-                     use_container_width=True, hide_index=True)
-
-    # ---------------- per share growth ----------------
-    ps = per_share_growth(fin, bs)
-    if ps and ps.get('revenue_cagr_pct') is not None:
-        st.markdown(section('Growth the holder actually received'), unsafe_allow_html=True)
-        g = st.columns(4)
-        g[0].markdown(card('Revenue CAGR', fmt(ps['revenue_cagr_pct'], 'pct'),
-                           f'{ps["from"]} to {ps["to"]}'), unsafe_allow_html=True)
-        g[1].markdown(card('Revenue per share CAGR',
-                           fmt(ps.get('revenue_per_share_cagr_pct'), 'pct'),
-                           'after any change in share count'), unsafe_allow_html=True)
-        g[2].markdown(card('EPS CAGR', fmt(ps.get('eps_cagr_pct'), 'pct'), 'per share'),
-                      unsafe_allow_html=True)
-        sc = ps.get('share_count_cagr_pct')
-        g[3].markdown(card('Share count CAGR', fmt(sc, 'pct'),
-                           'buying back' if (sc or 0) < 0 else 'issuing'),
-                      unsafe_allow_html=True)
-        if sc is not None and ps.get('revenue_per_share_cagr_pct') is not None:
-            gap = ps['revenue_cagr_pct'] - ps['revenue_per_share_cagr_pct']
-            if gap > 1:
-                st.markdown(f'<div class="dv-note">Revenue grew {gap:.1f} points a year '
-                            f'faster than revenue per share. That gap is dilution, and a '
-                            f'holder did not receive it.</div>', unsafe_allow_html=True)
-
-    # ---------------- risk ----------------
     risk = price_risk(hist)
-    if risk.get('vol_1y_pct') is not None:
-        st.markdown(section('Price risk'), unsafe_allow_html=True)
-        r = st.columns(5)
-        r[0].markdown(card('Volatility 1Y', fmt(risk['vol_1y_pct'], 'pct'),
-                           'Yahoo · annualised daily'), unsafe_allow_html=True)
-        r[1].markdown(card('Max drawdown', fmt(risk['max_drawdown_pct'], 'pct'),
-                           f'trough {risk.get("drawdown_from") or ""}'),
-                      unsafe_allow_html=True)
-        r[2].markdown(card('vs 200-day average', fmt(risk['pct_vs_200dma'], 'pct'),
-                           'Yahoo · live'), unsafe_allow_html=True)
-        r[3].markdown(card('1Y performance', fmt((tv or {}).get('perf_1y'), 'pct'),
-                           f'TradingView · {tv_date}'), unsafe_allow_html=True)
-        r[4].markdown(card('RSI 14', fmt((tv or {}).get('rsi14'), 'num', 1),
-                           'TradingView'), unsafe_allow_html=True)
-        if hist is not None and 'Close' in hist:
-            close = hist['Close'].dropna()
-            span = st.radio('Range', ['3M', '6M', '1Y', '2Y'], index=2, horizontal=True,
-                            label_visibility='collapsed', key='span')
-            days = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504}[span]
-            # the moving averages are computed on the full series and then trimmed, so a
-            # short view still shows a correct 200-day line instead of a truncated one
-            chart = pd.DataFrame({'Price': close})
-            if len(close) >= 50:
-                chart['50-day average'] = close.rolling(50).mean()
-            if len(close) >= 200:
-                chart['200-day average'] = close.rolling(200).mean()
-            st.line_chart(chart.tail(days), height=300)
+    # a second beta over five years, now that the full history is available
+    if hist is not None and 'Close' in hist and len(hist) > 1300:
+        risk['beta_5y'] = price_risk(hist.tail(1260)).get('beta_2y')
+    else:
+        risk['beta_5y'] = None
 
-            window = close.tail(days)
-            if len(window) > 2:
-                peak = window.cummax()
-                dd = ((window / peak) - 1) * 100
-                st.markdown(f'<div class="dv-note">Over the last {span.lower()}: '
-                            f'high {fmt(float(window.max()))}, low {fmt(float(window.min()))}, '
-                            f'change {fmt(float((window.iloc[-1]/window.iloc[0]-1)*100), "pct")}, '
-                            f'deepest fall from a peak within the window '
-                            f'{fmt(float(dd.min()), "pct")}.</div>',
-                            unsafe_allow_html=True)
-            with st.expander('Drawdown from the running peak, full two years'):
-                full_peak = close.cummax()
-                st.area_chart(((close / full_peak) - 1) * 100, height=200)
-                st.caption('Zero means the price is at a new high. This is the line that '
-                           'tells you what holding it actually felt like.')
+    lede = st.session_state.get('lede', '')
 
-    # ---------------- ownership, the piece nobody else has ----------------
-    if tv and tv.get('marquee'):
-        st.markdown(section('Superinvestor ownership · Dataroma'), unsafe_allow_html=True)
-        o = st.columns(3)
-        o[0].markdown(card('Investors holding', fmt(tv.get('marquee_investors'), 'int'),
-                           f'as of {(tv or {}).get("_marquee_as_of", "")}'),
-                      unsafe_allow_html=True)
-        o[1].markdown(card('Aggregate portfolio weight',
-                           fmt(tv.get('marquee_weight_pct'), 'pct'),
-                           'across all tracked portfolios'), unsafe_allow_html=True)
-        o[2].markdown(card('In the screen', 'Yes' if tv.get('screened') else 'No',
-                           'cleared its sector thresholds'), unsafe_allow_html=True)
+    html = pg.build(tv or {}, isin, yf_data, stats, forensics, resolution, risk,
+                    dupont(fin, bs), *quality_of_earnings(fin, cf),
+                    capital_allocation(cf), per_share_growth(fin, bs),
+                    span_label, close, ma50, ma200, lede)
+    st.markdown(html, unsafe_allow_html=True)
 
-    # ---------------- the institutions on the register ----------------
-    holders = (yf_data or {}).get('institutional_holders')
-    if holders is not None and hasattr(holders, 'empty') and not holders.empty:
-        st.markdown(section('Largest institutional holders'), unsafe_allow_html=True)
-        st.markdown(f'<div class="dv-note">{badge("Yahoo")} The whole institutional '
-                    f'register, index funds included. The Dataroma block above is a '
-                    f'different question - not who owns it, but which discretionary '
-                    f'investors chose it.</div>', unsafe_allow_html=True)
-        h = holders.copy()
-        for col in h.columns:
-            if 'Value' in str(col) or 'Shares' in str(col):
-                h[col] = h[col].apply(lambda v: fmt(v, 'money') if pd.notna(v) else '-')
-            if 'Out' in str(col) or 'pctHeld' in str(col):
-                h[col] = h[col].apply(
-                    lambda v: fmt(v*100 if pd.notna(v) and v < 1 else v, 'pct')
-                    if pd.notna(v) else '-')
-        st.dataframe(h.head(10), use_container_width=True, hide_index=True)
-
-    # ---------------- full TradingView table ----------------
-    with st.expander('Every TradingView field, with its period'):
-        table = []
-        for key, label in LABELS.items():
-            val = (tv or {}).get(key)
-            kind = 'pct' if key in PERCENT_METRICS else (
-                'x' if key in ('pe', 'fpe', 'current_ratio', 'debt_equity',
-                               'interest_cover', 'ebitda_cover') else 'num')
-            peer = percentile_of(val, stats, key)
-            table.append({'Metric': label, 'Value': fmt(val, kind),
-                          'Period': tvp(key) or '',
-                          'Sector median': fmt(peer['median'], kind) if peer else '-',
-                          'Position': peer['band'] if peer else '-'})
-        st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
-
-    # ---------------- news, which only Yahoo carries ----------------
-    news = (yf_data or {}).get('news') or []
-    if news:
-        st.markdown(section('Recent coverage'), unsafe_allow_html=True)
-        st.markdown(f'<div class="dv-note">{badge("Yahoo")} Headlines as at the last fetch. '
-                    f'Yahoo is the only source here that carries news at all, and it is '
-                    f'thin - treat this as a pointer, not as coverage.</div>',
-                    unsafe_allow_html=True)
-        shown = 0
-        for item in news:
-            content = item.get('content') if isinstance(item.get('content'), dict) else item
-            title = content.get('title') or item.get('title')
-            if not title:
-                continue
-            link = ((content.get('canonicalUrl') or {}).get('url')
-                    if isinstance(content.get('canonicalUrl'), dict)
-                    else content.get('link') or item.get('link'))
-            pub = (content.get('provider') or {}).get('displayName') \
-                if isinstance(content.get('provider'), dict) else item.get('publisher')
-            stamp = content.get('pubDate') or item.get('providerPublishTime')
-            if isinstance(stamp, (int, float)):
-                stamp = datetime.datetime.fromtimestamp(stamp).strftime('%d %b %Y')
-            bits = ' · '.join(str(x)[:40] for x in [pub, stamp] if x)
-            st.markdown(f"- [{title}]({link})  \n<span class='dv-note'>{bits}</span>"
-                        if link else f"- {title}  \n<span class='dv-note'>{bits}</span>",
-                        unsafe_allow_html=True)
-            shown += 1
-            if shown >= 6:
-                break
-
-    # ---------------- what is deliberately absent ----------------
-    with st.expander('What this page does not show, and why'):
-        st.markdown(
-            '- **Ten years of history.** Yahoo returns four annual periods. Anything '
-            'longer would have to be invented.\n'
-            '- **Segment revenue, guidance, transcripts, analyst estimates.** Not in this '
-            'data set at any price.\n'
-            '- **Point-in-time statements.** Restatements silently overwrite prior years, '
-            'so this is fine for analysis and unusable for backtesting.\n'
-            '- **Altman for financials.** Both models assume a non-financial balance '
-            'sheet, so the page shows nothing rather than a number that reads well and '
-            'means little.\n'
-            '- **A recommendation.** Every figure here is an input.')
+    with st.expander('Write the reading that appears at the foot of this page'):
+        st.text_area('One paragraph, in your own words. The three columns below it are '
+                     'generated from the figures; this paragraph is the judgement, so it is '
+                     'left to a person.', key='lede', height=110,
+                     placeholder='Left blank, the paragraph is omitted and only the '
+                                 'evidence columns show.')
+        st.caption('Saved for this session only.')
 
 
 # ---------------------------------------------------------------- landing page ----------
@@ -850,7 +601,7 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
         'holder actually received per share, and the forensic scores TradingView does not '
         'publish.')
 
-    c = st.columns(4)
+    c = st.columns(4, gap='small')
     c[0].markdown(card('In this feed', f'{total:,}',
                        'screened names plus every marquee holding'), unsafe_allow_html=True)
     c[1].markdown(card('Cleared a screen', f'{screened:,}',
