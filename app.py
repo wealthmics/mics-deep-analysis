@@ -488,8 +488,12 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
         got = (forensics or {}).get(key) or {}
         val, cov = got.get('score'), got.get('coverage')
         if val is None:
-            c[slot].markdown(card(label, '-', f'Yahoo · {got.get("details", "not computed")}',
-                                  thin=True), unsafe_allow_html=True)
+            why = got.get('details') or 'no Yahoo statements available'
+            if isinstance(why, dict):
+                why = 'inputs incomplete'
+            why = str(why)
+            c[slot].markdown(card(label, '-', f'Yahoo · {why[:90]}', thin=True),
+                             unsafe_allow_html=True)
         else:
             extra = f' · coverage {cov:.0f}%' if cov else ''
             if key == 'ohlson' and got.get('as_pct'):
@@ -675,10 +679,33 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
                            'TradingView'), unsafe_allow_html=True)
         if hist is not None and 'Close' in hist:
             close = hist['Close'].dropna()
+            span = st.radio('Range', ['3M', '6M', '1Y', '2Y'], index=2, horizontal=True,
+                            label_visibility='collapsed', key='span')
+            days = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504}[span]
+            # the moving averages are computed on the full series and then trimmed, so a
+            # short view still shows a correct 200-day line instead of a truncated one
             chart = pd.DataFrame({'Price': close})
+            if len(close) >= 50:
+                chart['50-day average'] = close.rolling(50).mean()
             if len(close) >= 200:
                 chart['200-day average'] = close.rolling(200).mean()
-            st.line_chart(chart, height=260)
+            st.line_chart(chart.tail(days), height=300)
+
+            window = close.tail(days)
+            if len(window) > 2:
+                peak = window.cummax()
+                dd = ((window / peak) - 1) * 100
+                st.markdown(f'<div class="dv-note">Over the last {span.lower()}: '
+                            f'high {fmt(float(window.max()))}, low {fmt(float(window.min()))}, '
+                            f'change {fmt(float((window.iloc[-1]/window.iloc[0]-1)*100), "pct")}, '
+                            f'deepest fall from a peak within the window '
+                            f'{fmt(float(dd.min()), "pct")}.</div>',
+                            unsafe_allow_html=True)
+            with st.expander('Drawdown from the running peak, full two years'):
+                full_peak = close.cummax()
+                st.area_chart(((close / full_peak) - 1) * 100, height=200)
+                st.caption('Zero means the price is at a new high. This is the line that '
+                           'tells you what holding it actually felt like.')
 
     # ---------------- ownership, the piece nobody else has ----------------
     if tv and tv.get('marquee'):
@@ -1025,10 +1052,26 @@ def run_company(ticker, isin, ccy):
             yf_data = load_yahoo(symbol)
         if yf_data and not yf_data.get('error'):
             forensics = compute_forensics(yf_data, tv_entry)
+            # a partial fetch is still worth having, so say what is thin rather than
+            # dropping the lot
+            thin = {k: v for k, v in (yf_data.get('fetch_status') or {}).items()
+                    if v != 'ok'}
+            if thin:
+                with st.expander(f'Yahoo returned {len(thin)} incomplete piece(s) - '
+                                 f'what is affected'):
+                    for part, why in thin.items():
+                        st.markdown(f'- **{part}** — {why}')
+                    st.caption('Yahoo throttles hosted apps, and the info endpoint goes '
+                               'first. Statements and prices usually survive, which is why '
+                               'each piece is now fetched on its own. Reloading in a minute '
+                               'often fills the gaps.')
         else:
-            st.info(f'Yahoo has nothing for {symbol}. The TradingView figures below still '
-                    f'stand on their own; only the four-year trends and forensic scores '
-                    f'are missing.')
+            st.warning(f'Yahoo returned nothing usable for {symbol}, so the forensic '
+                       f'scores, four-year trends and price history are all missing from '
+                       f'this page. Everything sourced from TradingView below is '
+                       f'unaffected.')
+            with st.expander('What Yahoo said'):
+                st.code((yf_data or {}).get('error', 'no detail returned'))
             yf_data = None
 
     if tv_entry is None and yf_data is None:

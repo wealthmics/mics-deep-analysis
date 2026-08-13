@@ -32,114 +32,136 @@ DEFAULT_TICKERS = [
 ]
 
 def get_ticker_data(ticker_symbol: str, force_refresh: bool = False) -> dict:
-    """
-    Fetches raw financial and price data for a ticker from yfinance,
-    caching it locally to speed up subsequent loads.
+    """Fetch everything Yahoo has for one ticker, keeping whatever arrives.
+
+    This used to raise as soon as ticker.info came back thin, which threw away the
+    statements and the price history along with it - and those are usually fine. On a
+    hosted app the info endpoint is the first thing Yahoo throttles, so an all-or-nothing
+    fetch means the whole page goes dark because one call was rate limited.
+
+    Now every piece is fetched independently and kept on its own. A 'fetch_status' dict
+    records what arrived and what did not, so the page can say which sections are missing
+    and why instead of showing a blank.
     """
     ticker_symbol = ticker_symbol.strip().upper()
     cache_path = os.path.join(CACHE_DIR, f"{ticker_symbol}.pkl")
-    
-    # Check cache validity (24 hours expiry)
+
     if not force_refresh and os.path.exists(cache_path):
         try:
-            file_age = time.time() - os.path.getmtime(cache_path)
-            if file_age < 86400: # 24 hours
+            if (time.time() - os.path.getmtime(cache_path)) < 86400:
                 with open(cache_path, "rb") as f:
                     data = pickle.load(f)
-                    # Simple validation to ensure it has required structure
-                    if isinstance(data, dict) and "info" in data:
-                        return data
+                if isinstance(data, dict) and data.get('_any'):
+                    return data
         except Exception as e:
             print(f"Error reading cache for {ticker_symbol}: {e}")
-            
-    # Fetch fresh data
+
     print(f"Fetching live data for {ticker_symbol}...")
+    # yfinance 1.x dropped the requests Session argument, so try it and fall back rather
+    # than letting a library detail take the whole fetch down
     try:
-        # yfinance moved from requests to curl_cffi around 0.2.5x, and newer versions
-        # reject a plain requests Session. Try it, fall back to no session rather than
-        # letting the whole fetch fail on a library detail.
+        ticker = yf.Ticker(ticker_symbol, session=get_session())
+        _ = ticker.fast_info
+    except Exception:
+        ticker = yf.Ticker(ticker_symbol)
+
+    status, data = {}, {"symbol": ticker_symbol, "fetched_at": datetime.datetime.now()}
+
+    def grab(name, fn, required_len=None):
         try:
-            ticker = yf.Ticker(ticker_symbol, session=get_session())
-            _ = ticker.fast_info            # forces the session to be exercised now
-        except Exception:
-            ticker = yf.Ticker(ticker_symbol)
-        
-        # 1. Info
-        info = ticker.info
-        if not info or len(info) < 5:
-            # If yfinance returned empty or invalid info
-            raise ValueError("No info returned from yfinance")
-            
-        # 2. Financials
-        financials = ticker.financials
-        balance_sheet = ticker.balance_sheet
-        cashflow = ticker.cashflow
-        
-        # 3. Price History (2 years for beta, volatility, 200 SMA, drawdowns)
-        history = ticker.history(period="2y")
-        
-        # 4. Institutional Holders
-        try:
-            inst_holders = ticker.institutional_holders
-            if inst_holders is not None and not isinstance(inst_holders, pd.DataFrame):
-                inst_holders = pd.DataFrame(inst_holders)
-        except Exception:
-            inst_holders = None
-            
-        # 5. Options data for Implied Volatility & Skew
-        options_data = {}
-        try:
-            expirations = ticker.options
-            if expirations:
-                # Get nearest expiration
-                near_exp = expirations[0]
-                chain = ticker.option_chain(near_exp)
-                options_data = {
-                    "expiration": near_exp,
-                    "calls": chain.calls,
-                    "puts": chain.puts
-                }
+            value = fn()
+            if value is None:
+                status[name] = 'Yahoo returned nothing'
+                return None
+            if required_len is not None and len(value) < required_len:
+                status[name] = f'only {len(value)} fields returned, likely rate limited'
+                return value or None
+            if hasattr(value, 'empty') and value.empty:
+                status[name] = 'Yahoo returned an empty table'
+                return None
+            status[name] = 'ok'
+            return value
         except Exception as e:
-            print(f"Could not fetch options for {ticker_symbol}: {e}")
-            
-        # 6. News
-        news = []
+            status[name] = f'{e.__class__.__name__}: {str(e)[:90]}'
+            return None
+
+    data['info'] = grab('info', lambda: ticker.info, required_len=5) or {}
+    if not data['info']:
+        # fast_info survives throttling more often and still carries price and share count,
+        # which is enough for several things on the page
         try:
-            news = ticker.news
+            fi = ticker.fast_info
+            data['info'] = {k: v for k, v in {
+                'currentPrice': getattr(fi, 'last_price', None),
+                'sharesOutstanding': getattr(fi, 'shares', None),
+                'currency': getattr(fi, 'currency', None),
+                'marketCap': getattr(fi, 'market_cap', None),
+                'fiftyTwoWeekLow': getattr(fi, 'year_low', None),
+                'fiftyTwoWeekHigh': getattr(fi, 'year_high', None),
+            }.items() if v is not None}
+            if data['info']:
+                status['info'] += ' - fell back to fast_info'
         except Exception:
             pass
-            
-        data = {
-            "symbol": ticker_symbol,
-            "fetched_at": datetime.datetime.now(),
-            "info": info,
-            "financials": financials,
-            "balance_sheet": balance_sheet,
-            "cashflow": cashflow,
-            "history": history,
-            "institutional_holders": inst_holders,
-            "options": options_data,
-            "news": news
-        }
-        
-        # Save to cache
-        with open(cache_path, "wb") as f:
-            pickle.dump(data, f)
-            
-        return data
-        
+
+    data['financials'] = grab('financials', lambda: ticker.financials)
+    data['balance_sheet'] = grab('balance_sheet', lambda: ticker.balance_sheet)
+    data['cashflow'] = grab('cashflow', lambda: ticker.cashflow)
+    data['quarterly_financials'] = grab('quarterly_financials',
+                                        lambda: ticker.quarterly_financials)
+    data['history'] = grab('history', lambda: ticker.history(period="2y", auto_adjust=True))
+    if data['history'] is None:
+        data['history'] = grab('history_1y',
+                               lambda: ticker.history(period="1y", auto_adjust=True))
+
+    holders = grab('institutional_holders', lambda: ticker.institutional_holders)
+    if holders is not None and not isinstance(holders, pd.DataFrame):
+        holders = pd.DataFrame(holders)
+    data['institutional_holders'] = holders
+
+    data['news'] = grab('news', lambda: ticker.news) or []
+
+    options = {}
+    try:
+        expirations = ticker.options
+        if expirations:
+            chain = ticker.option_chain(expirations[0])
+            options = {"expiration": expirations[0], "calls": chain.calls,
+                       "puts": chain.puts}
+            status['options'] = 'ok'
+        else:
+            status['options'] = 'no expirations listed'
     except Exception as e:
-        print(f"Error fetching data for {ticker_symbol}: {e}")
-        # Try loading expired cache as fallback if yfinance fails
-        if os.path.exists(cache_path):
-            try:
-                with open(cache_path, "rb") as f:
-                    data = pickle.load(f)
-                    data["fallback_stale"] = True
-                    return data
-            except Exception:
-                pass
-        return {"symbol": ticker_symbol, "error": str(e)}
+        status['options'] = f'{e.__class__.__name__}: {str(e)[:60]}'
+    data['options'] = options
+
+    data['fetch_status'] = status
+    # anything at all is worth keeping and worth caching
+    data['_any'] = any(data.get(k) is not None and (
+        not hasattr(data[k], 'empty') or not data[k].empty)
+        for k in ('financials', 'balance_sheet', 'cashflow', 'history')) or bool(data['info'])
+
+    if data['_any']:
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            print(f"Could not cache {ticker_symbol}: {e}")
+        return data
+
+    # nothing arrived - fall back to a stale cache if one exists
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                stale = pickle.load(f)
+            stale["fallback_stale"] = True
+            return stale
+        except Exception:
+            pass
+    data['error'] = ('Yahoo returned nothing usable. '
+                     + '; '.join(f'{k}: {v}' for k, v in status.items() if v != 'ok')[:400])
+    return data
+
 
 def fetch_universe_data(tickers=None, progress_callback=None) -> dict:
     """
