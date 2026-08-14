@@ -169,17 +169,10 @@ CSS = """
  .an .kv .k{font-weight:500}
  .an .kv .v{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;
      white-space:nowrap}
- /* per/band used to be display:block, which dropped them onto their own line under the
-    label and value - fine when a card has room to breathe, but "the rest of the ratios"
-    packs many rows into the rail and that turned every row into two lines instead of the
-    one line every other card in the rail uses. Inline + a small leading dot keeps each
-    row to a single line, same as the rest of the rail. */
- .an .kv .per{font-size:9.5px;font-weight:600;color:#1f3864;
-     letter-spacing:.05em;text-transform:uppercase;margin-left:6px;white-space:nowrap}
- .an .kv .per:not(:empty):before{content:'\00b7 '}
- .an .kv .band{font-size:9.5px;font-weight:600;color:#1f3864;margin-left:6px;
-     text-transform:lowercase;letter-spacing:0;white-space:nowrap}
- .an .kv .band:before{content:'\00b7 '}
+ .an .kv .per{display:block;font-size:9.5px;font-weight:600;color:#1f3864;
+     letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
+ .an .kv .band{display:block;font-size:9.5px;font-weight:600;color:#1f3864;margin-top:2px;
+     text-transform:lowercase;letter-spacing:0}
  .an .holder{display:grid;grid-template-columns:1fr auto;gap:12px;font-size:12px;
      padding:7px 0;border-bottom:1px solid #e9edf3}
  .an .holder:last-child{border-bottom:none}
