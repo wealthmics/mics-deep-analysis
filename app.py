@@ -36,7 +36,12 @@ st.markdown("""
 <style>
   section[data-testid="stSidebar"] {display:none;}
   div[data-testid="collapsedControl"] {display:none;}
-  .block-container {padding-top:1.6rem; max-width:1500px;}
+  .block-container {padding-top:0.4rem; padding-bottom:1rem; max-width:1500px;}
+  /* Streamlit leaves a gap for every element it renders. The page is one markdown block,
+     so those gaps only create empty bands. */
+  div[data-testid="stVerticalBlock"] > div:empty {display:none;}
+  div[data-testid="stMarkdownContainer"] > :first-child {margin-top:0;}
+  .stApp > header {height:0;}
   #MainMenu, footer {visibility:hidden;}
 </style>
 """, unsafe_allow_html=True)
@@ -231,20 +236,21 @@ def quality_of_earnings(fin, cf):
     if len(usable) >= 2:
         avg = sum(r['cfo_to_ni'] for r in usable) / len(usable)
         loss_years = sum(1 for r in rows if (r.get('net_income') or 0) <= 0)
-        caveat = (f' The {loss_years} loss year(s) are excluded, since a ratio against a '
-                  f'loss carries no meaning.' if loss_years else '')
+        caveat = ((f' The loss year is excluded' if loss_years == 1 else
+                   f' The {loss_years} loss years are excluded')
+                  + ', since a ratio against a loss carries no meaning.'
+                  if loss_years else '')
         if avg >= 1.1:
-            verdict = (f'Cash conversion averages <b>{avg:.2f}x</b> reported profit over '
-                       f'{len(usable)} profitable years. Earnings are backed by cash.'
-                       + caveat)
+            verdict = ('<b>The profit is backed by cash.</b> Operating cash flow has run '
+                       'ahead of reported earnings in every profitable year here, which is '
+                       'the order you want them in.' + caveat)
         elif avg >= 0.9:
-            verdict = (f'Cash conversion averages <b>{avg:.2f}x</b> reported profit. Broadly '
-                       f'in line, nothing to flag.' + caveat)
+            verdict = ('<b>Cash and profit track each other.</b> Nothing here to flag either '
+                       'way.' + caveat)
         else:
-            verdict = (f'Cash conversion averages only <b>{avg:.2f}x</b> reported profit over '
-                       f'{len(usable)} profitable years. Profit is running ahead of cash, '
-                       f'which is worth understanding before anything else on this '
-                       f'page.' + caveat)
+            verdict = ('<b>Profit is running ahead of cash.</b> That gap is the first thing '
+                       'to understand about this company, ahead of anything else on this '
+                       'page.' + caveat)
     return rows, verdict
 
 
@@ -507,23 +513,30 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
     hist = (yf_data or {}).get('history')
     stats = (sector_stats or {}).get((tv or {}).get('gics')) or {}
 
-    # range selector sits above the page so a change reruns and redraws the chart
-    span_label = '1Y'
-    close = ma50 = ma200 = None
+    # the range comes off the query string, so the buttons can live inside the chart card
+    # rather than above the whole page as a Streamlit widget
+    def qp(key):
+        raw = st.query_params.get(key) if hasattr(st, 'query_params') else None
+        if isinstance(raw, list):
+            raw = raw[0] if raw else None
+        return raw
+
+    span_label, close, ma50, ma200, spans = '1Y', None, None, None, []
     if hist is not None and 'Close' in hist and len(hist) > 5:
-        available = [k for k, n in SPANS.items() if n is None or len(hist) >= n * 0.6]
-        default = available.index('1Y') if '1Y' in available else len(available) - 1
-        span_label = st.radio('Price history range', available, index=default,
-                              horizontal=True, key='span')
+        spans = [k for k, n in SPANS.items() if n is None or len(hist) >= n * 0.6]
+        wanted = qp('span')
+        span_label = wanted if wanted in spans else ('1Y' if '1Y' in spans else spans[-1])
         full = hist['Close'].dropna()
         # averages are computed on the full series and then sliced, so a short window still
         # carries a correct 200 day line rather than a truncated one
-        full_ma50 = full.rolling(50).mean()
-        full_ma200 = full.rolling(200).mean()
+        full_ma50, full_ma200 = full.rolling(50).mean(), full.rolling(200).mean()
         n = SPANS[span_label]
         close = full if n is None else full.tail(n)
-        ma50 = full_ma50.reindex(close.index)
-        ma200 = full_ma200.reindex(close.index)
+        ma50, ma200 = full_ma50.reindex(close.index), full_ma200.reindex(close.index)
+
+    # everything except span, so a range click keeps the company it is looking at
+    keep = [(k, qp(k)) for k in ('ticker', 'isin', 'ccy')]
+    base_query = ''.join(f'{k}={v}&' for k, v in keep if v)
 
     risk = price_risk(hist)
     # a second beta over five years, now that the full history is available
@@ -537,8 +550,36 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
     html = pg.build(tv or {}, isin, yf_data, stats, forensics, resolution, risk,
                     dupont(fin, bs), *quality_of_earnings(fin, cf),
                     capital_allocation(cf), per_share_growth(fin, bs),
-                    span_label, close, ma50, ma200, lede)
+                    span_label, close, ma50, ma200, lede, spans, base_query,
+                    percentile_of)
     st.markdown(html, unsafe_allow_html=True)
+
+    # the report, as a standalone file. The page is already one block of self contained
+    # HTML with print rules, so the download opens and prints to PDF with the layout intact.
+    ticker = (tv or {}).get('ticker') or 'company'
+    name = (tv or {}).get('name') or ticker
+    stamp = (tv or {}).get('_as_of', '')
+    # A clean document title matters: if the browser's print header is left on, it prints
+    # the title, so this makes it read as a report rather than as a file path.
+    doc_title = f'{name} equity analysis, {stamp}' if stamp else f'{name} equity analysis'
+    report = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+              '<meta name="viewport" content="width=device-width,initial-scale=1">'
+              f'<title>{doc_title}</title>'
+              '<style>@page{size:A4 portrait;margin:11mm 9mm}'
+              'body{margin:0;background:#e7ecf3;padding:16px}'
+              '@media print{body{background:#fff;padding:0}}</style></head><body>'
+              + html + '</body></html>')
+    st.download_button('Download this report', report,
+                       file_name=f'{ticker}_equity_analysis_'
+                                 f'{datetime.date.today():%Y-%m-%d}.html',
+                       mime='text/html')
+    st.caption('Downloads one self contained file. Open it and print to PDF, or press '
+               'Ctrl+P on this page. Before saving, untick **Headers and footers** in the '
+               'print dialog: that setting is what prints the date, the page title and the '
+               'file path down the edges of the page, and no stylesheet can switch it off. '
+               'Chrome remembers the choice afterwards. The report prints its own header '
+               'with the company, the ticker and the data date, so nothing is lost by '
+               'turning the browser one off.')
 
     with st.expander('Write the reading that appears at the foot of this page'):
         st.text_area('One paragraph, in your own words. The three columns below it are '

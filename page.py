@@ -11,10 +11,24 @@ Palette and typography are taken from the screener page so the two read as one p
 """
 
 import math
+import re
 
 import pandas as pd
 
 INK, NAVY, GOLD = '#1a1a1a', '#1f3864', '#bf8f00'
+
+# Hover bands are sized by pixels, not by data points, and this is the reason why.
+#
+# A browser only shows an SVG title once the pointer has RESTED on one element. Giving every
+# data point its own band made each band about a pixel wide, so the smallest movement of the
+# mouse crossed into the next element and cancelled the tooltip timer. The tooltip then never
+# appeared at all - more precision produced less function.
+#
+# So each band is at least this many viewBox units wide, which lands around eleven screen
+# pixels once the chart is stretched to its container. That is wide enough to rest on. The
+# band still reports the real date and close of the point beneath it, so nothing is invented,
+# and on a 3M chart the bands come out roughly one per trading day anyway.
+HOVER_BAND_UNITS = 9
 UP, DOWN, MID = '#12703a', '#a5201a', '#8a6300'
 
 CSS = """
@@ -23,7 +37,7 @@ CSS = """
  .an{font:14px/1.45 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;
      max-width:1180px;margin:0 auto}
  .an .num{font-variant-numeric:tabular-nums}
- .an .mast{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:20px 24px;
+ .an .mast{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:22px 26px;
      display:flex;justify-content:space-between;align-items:flex-start;gap:28px}
  .an .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
      color:#bf8f00;margin-bottom:8px}
@@ -42,7 +56,7 @@ CSS = """
  .an .up{color:#12703a} .an .down{color:#a5201a} .an .mid{color:#8a6300}
  .an .strip{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:#d8dee9;
      border:1px solid #d8dee9;border-radius:8px;overflow:hidden;margin-top:12px}
- .an .strip>div{background:#fff;padding:12px 14px}
+ .an .strip>div{background:#fff;padding:15px 16px 16px}
  .an .strip .k{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
      color:#1f3864}
  .an .strip .v{margin-top:6px;font-size:21px;font-weight:650;line-height:1}
@@ -54,17 +68,27 @@ CSS = """
  .an .pill.r{background:#fbe6e4;color:#a5201a} .an .pill.n{background:#e9edf3;color:#1f3864}
  .an .grid{display:grid;grid-template-columns:1fr 348px;gap:12px;margin-top:12px;
      align-items:start}
+ /* the rail travels with the scroll when the wide column is the longer of the two, so the
+    reference figures stay in view and no dead space is left at the foot */
+ .an .rail{position:sticky;top:14px}
+ @media(max-width:940px){.an .rail{position:static}}
+ @media print{.an .rail{position:static}}
+ /* rail cards that were moved under the wide column, laid two across so they fill the
+    space rather than leaving a ragged edge */
+ .an .spill{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+ @media(max-width:940px){.an .spill{grid-template-columns:1fr}}
  @media(max-width:940px){.an .grid{grid-template-columns:1fr}
      .an .strip{grid-template-columns:repeat(3,1fr)}}
- .an .card{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:17px 19px;
-     margin-bottom:12px}
+ .an .card{background:#fff;border:1px solid #d8dee9;border-radius:8px;
+     padding:20px 24px 22px;margin-bottom:12px}
  .an .card h2{margin:0 0 3px;font-size:13.5px;font-weight:700;letter-spacing:-.01em}
- .an .card .sub{font-size:11.5px;font-weight:500;margin-bottom:13px;line-height:1.45}
+ .an .card .sub{font-size:11.5px;font-weight:500;margin-bottom:16px;line-height:1.5}
  .an .src{float:right;font-size:9.5px;font-weight:700;letter-spacing:.05em;
      text-transform:uppercase;padding:2px 7px;border-radius:3px;background:#e8edf5;color:#1f3864}
  .an .src.y{background:#f7f1de;color:#bf8f00}
  .an table{width:100%;border-collapse:collapse}
- .an th,.an td{text-align:right;padding:7px 0;font-size:12.5px;border-bottom:1px solid #e9edf3}
+ .an th,.an td{text-align:right;padding:9px 0;font-size:12.5px;
+     border-bottom:1px solid #e9edf3}
  .an th{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#1f3864}
  .an th:first-child,.an td:first-child{text-align:left}
  .an tr:last-child td{border-bottom:none}
@@ -81,51 +105,131 @@ CSS = """
  .an .brow .bv{width:88px;text-align:right;font-size:12px;font-weight:700;
      font-variant-numeric:tabular-nums;flex:none}
  .an .brow .bp{width:64px;text-align:right;font-size:11px;font-weight:600;color:#1f3864;flex:none}
+ /* mirrors the bar row below it column for column, or the headings sit over the wrong
+    things: 132px label, the flexible bar, 88px amount, 64px share */
+ .an .usehead{display:flex;align-items:flex-end;gap:10px;font-size:9.5px;font-weight:700;
+     letter-spacing:.06em;text-transform:uppercase;color:#1f3864;margin-bottom:6px;
+     padding-bottom:5px;border-bottom:1px solid #e9edf3}
+ .an .usehead .lab{width:132px;flex:none}
+ .an .usehead .spacer{flex:1}
+ .an .usehead .amt{width:88px;text-align:right;flex:none}
+ .an .usehead .shr{width:64px;text-align:right;flex:none;line-height:1.2}
  .an .legend{margin-top:11px;font-size:10.5px;font-weight:500}
  .an .legend i{display:inline-block;width:9px;height:9px;background:#1f3864;border-radius:2px;
      margin-right:4px;vertical-align:-1px}
  .an .legend u{display:inline-block;width:2px;height:11px;background:#bf8f00;margin:0 4px 0 12px;
      vertical-align:-2px;text-decoration:none}
- .an .read{margin-top:13px;padding:12px 14px;background:#f4f7fb;border:1px solid #d8dee9;
+ .an .read{margin-top:16px;padding:14px 16px;background:#f4f7fb;border:1px solid #d8dee9;
      border-left:3px solid #1f3864;border-radius:5px;font-size:12.5px;font-weight:500;
      line-height:1.6}
  .an .read b{font-weight:700}
- .an .chart{width:100%;display:block}
- .an .kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;font-size:12.5px;
-     border-bottom:1px solid #e9edf3}
+ .an .cnote{margin-top:12px;padding-top:11px;border-top:1px solid #e9edf3;font-size:11.5px;
+     font-weight:500;line-height:1.55}
+ .an .cnote b{font-weight:700}
+ .an .chart{width:100%;display:block;cursor:crosshair}
+
+ /* Chart axes.
+    The labels are HTML rather than SVG text, because the chart SVG is stretched with
+    preserveAspectRatio="none" and any text inside it stretches with it, which made the
+    numbers look like a different typeface from the page.
+    The plot reserves room on the right for the vertical scale so the labels sit beside the
+    chart instead of on top of it, and the horizontal row below is positioned by percentage
+    against the same width as the plot area. */
+ .an .plot{position:relative;padding-right:54px}
+ .an .yaxis{position:absolute;right:0;top:0;bottom:0;width:50px;pointer-events:none}
+ .an .yaxis span{position:absolute;right:0;font-size:10px;font-weight:600;color:#1f3864;
+     white-space:nowrap;line-height:1}
+ /* the outer two are anchored to the plot edges. Centring all three hung half of the top
+    label above the chart, where it was clipped. */
+ .an .yaxis .hi{top:1px}
+ .an .yaxis .mid{top:50%;transform:translateY(-50%)}
+ .an .yaxis .lo{bottom:1px}
+ .an .xaxis{position:relative;display:block;height:15px;margin:6px 54px 0 0;
+     font-size:10px;font-weight:600;color:#1f3864}
+ .an .xaxis span{position:absolute;top:0;white-space:nowrap}
+ .an .ddlabel{clear:both;font-size:10px;font-weight:700;letter-spacing:.07em;
+     text-transform:uppercase;color:#1f3864;margin:20px 0 8px;padding-top:16px;
+     border-top:1px solid #e9edf3}
+ /* Hover readout. A native SVG title waits on the browser's own delay and often never
+    fires, so the tooltip is drawn inside the SVG and revealed with CSS. No script is
+    involved, which matters because Streamlit strips script tags out of markdown. */
+ .an .hb .tip,.an .hb .xh,.an .hb .dot{opacity:0;transition:opacity .06s}
+ .an .hb .tip{pointer-events:none}
+ .an .hb:hover .tip,.an .hb:hover .xh,.an .hb:hover .dot{opacity:1}
+ .an .tabs{display:flex;gap:5px;margin-bottom:11px;flex-wrap:wrap}
+ .an .sbtn{border:1px solid #d8dee9;background:#fff;color:#1f3864;font-size:11px;
+     font-weight:700;padding:5px 11px;border-radius:4px;text-decoration:none;display:inline-block}
+ .an .sbtn:hover{border-color:#1f3864}
+ .an .sbtn.on{background:#1f3864;border-color:#1f3864;color:#fff}
+ /* Every row in the rail is the same two column grid, so the values line up down the
+    whole column instead of each card finding its own right edge. */
+ .an .kv{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:baseline;
+     padding:8px 0;font-size:12.5px;border-bottom:1px solid #e9edf3}
  .an .kv:last-child{border-bottom:none}
- .an .kv .k{font-weight:500} .an .kv .v{font-weight:700;font-variant-numeric:tabular-nums}
- .an .holder{display:flex;justify-content:space-between;font-size:12px;padding:5px 0;
-     border-bottom:1px solid #e9edf3}
+ .an .kv .k{font-weight:500}
+ .an .kv .v{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;
+     white-space:nowrap}
+ .an .kv .per{display:block;font-size:9.5px;font-weight:600;color:#1f3864;
+     letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
+ .an .kv .band{display:block;font-size:9.5px;font-weight:600;color:#1f3864;margin-top:2px;
+     text-transform:lowercase;letter-spacing:0}
+ .an .holder{display:grid;grid-template-columns:1fr auto;gap:12px;font-size:12px;
+     padding:7px 0;border-bottom:1px solid #e9edf3}
  .an .holder:last-child{border-bottom:none}
  .an .holder .n{font-weight:500}
- .an .holder .p{font-weight:700;font-variant-numeric:tabular-nums}
- .an .news a{display:block;font-size:12.5px;font-weight:600;color:#1a1a1a;text-decoration:none;
-     padding:8px 0;border-bottom:1px solid #e9edf3;line-height:1.45}
+ .an .holder .p{font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+ .an .news a{display:block;font-size:12.5px;font-weight:600;color:#1a1a1a;
+     text-decoration:none;padding:10px 0;border-bottom:1px solid #e9edf3;line-height:1.45}
  .an .news a:last-child{border-bottom:none}
  .an .news .m{font-size:10.5px;font-weight:600;color:#1f3864;margin-top:3px}
  .an .body-text{font-size:12.5px;font-weight:500;line-height:1.6;margin-top:10px}
  .an .view{background:#fff;border:1px solid #d8dee9;border-top:3px solid #1f3864;
-     border-radius:8px;padding:14px 18px;margin-top:12px}
- .an .view h2{margin:0;font-size:13px;font-weight:700}
- .an .view .lede{font-size:12.5px;font-weight:500;line-height:1.55;margin:8px 0 11px}
+     border-radius:8px;padding:22px 24px 24px;margin-top:14px}
+ .an .view h2{margin:0;font-size:14px;font-weight:700}
+ .an .view .lede{font-size:13px;font-weight:500;line-height:1.65;margin:12px 0 0}
  .an .view .lede b{font-weight:700}
- .an .vcols{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+ .an .vcols{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:22px}
  @media(max-width:940px){.an .vcols{grid-template-columns:1fr}}
- .an .vcol{border:1px solid #d8dee9;border-radius:5px;padding:9px 11px;background:#f4f7fb}
+ .an .vcol{border:1px solid #d8dee9;border-radius:6px;padding:15px 17px 17px;background:#f4f7fb}
  .an .vcol.s{border-left:3px solid #12703a}
  .an .vcol.c{border-left:3px solid #8a6300}
  .an .vcol.v{border-left:3px solid #1f3864}
- .an .vcol h3{margin:0 0 6px;font-size:9.5px;font-weight:700;letter-spacing:.07em;
-     text-transform:uppercase}
- .an .vcol ul{margin:0;padding-left:14px}
- .an .vcol li{font-size:11.5px;font-weight:500;line-height:1.45;margin-bottom:4px}
+ .an .vcol h3{margin:0 0 12px;font-size:10px;font-weight:700;letter-spacing:.08em;
+     text-transform:uppercase;padding-bottom:9px;border-bottom:1px solid #d8dee9}
+ .an .vcol ul{margin:0;padding-left:17px}
+ .an .vcol li{font-size:12px;font-weight:500;line-height:1.6;margin-bottom:10px}
  .an .vcol li:last-child{margin-bottom:0}
- .an .disc{margin-top:10px;font-size:10.5px;font-weight:500;line-height:1.5}
+ .an .disc{margin-top:20px;padding-top:15px;border-top:1px solid #d8dee9;font-size:10.5px;
+     font-weight:500;line-height:1.6}
  .an .disc b{font-weight:700}
  .an .foot{margin-top:16px;padding:15px 18px;background:#fff;border:1px solid #d8dee9;
      border-radius:8px;font-size:11px;font-weight:500;line-height:1.75}
  .an .foot b{font-weight:700}
+ .an .printhead{display:none}
+ @media print{.an .printhead{display:flex !important;justify-content:space-between;
+     align-items:baseline;font-size:9.5px;font-weight:700;letter-spacing:.07em;
+     text-transform:uppercase;color:#1f3864;border-bottom:1px solid #1f3864;
+     padding-bottom:7px;margin-bottom:12px}}
+
+ /* Print to PDF. Cards must not be split across a page break, the grid collapses to one
+    column so nothing is cut off at the right margin, and colour is forced on because
+    browsers drop backgrounds by default. */
+ @media print{
+   @page{size:A4 portrait;margin:12mm 10mm}
+   body,.stApp,.an{background:#fff !important}
+   .an{max-width:none;font-size:10.5px}
+   .an .grid{grid-template-columns:1fr !important;gap:8px}
+   .an .strip{grid-template-columns:repeat(3,1fr)}
+   .an .card,.an .view,.an .foot,.an .mast,.an .strip{break-inside:avoid;
+       page-break-inside:avoid;box-shadow:none}
+   .an .card,.an .view,.an .foot,.an .mast{border:1px solid #bbb}
+   .an .mast h1{font-size:22px}
+   .an .quote .px{font-size:24px}
+   .an .tabs{display:none}
+   .an *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+   .stApp header,section[data-testid="stSidebar"],div[data-testid="stExpander"],
+   .stDownloadButton,.stButton{display:none !important}
+ }
 </style>
 """
 
@@ -152,6 +256,36 @@ def f(value, kind='num', dp=2):
 def minus(text):
     """A real minus sign reads better than a hyphen in a column of numbers."""
     return str(text).replace('-', '\u2212')
+
+
+def sentence(clauses):
+    """Join clauses into one sentence.
+
+    Any clause can be absent, because the feed does not always carry the field behind it.
+    Each is written to read as a continuation, so the leading conjunction is stripped from
+    all of them and put back only where it belongs. Joining blindly produced lines that
+    opened with "And momentum is unremarkable".
+    """
+    parts = []
+    for c in clauses:
+        c = (c or '').strip().rstrip('.')
+        for lead in ('and ', 'but ', 'with '):
+            if c.lower().startswith(lead):
+                c = c[len(lead):].lstrip()
+                break
+        if c:
+            parts.append(c)
+    if not parts:
+        return ''
+    parts[0] = parts[0][0].upper() + parts[0][1:]
+    if len(parts) == 1:
+        return parts[0] + '.'
+    return ', '.join(parts[:-1]) + ', and ' + parts[-1] + '.'
+
+
+def note(text):
+    """A single line conclusion under a small card. Every box should answer, not just list."""
+    return f'<div class="cnote">{text}</div>'
 
 
 def read(text):
@@ -184,27 +318,29 @@ def _points(values, width, height, pad_top=6, pad_bottom=6):
     return ' '.join(pts), lo, hi
 
 
-def svg_price(close, ma50, ma200, width=720, height=206):
-    """Close with its two moving averages. Averages are computed on the full series and
-    then sliced, so a short window still shows a correct 200 day line."""
-    body, lo, hi = _points(list(close), width, height)
+def svg_price(close, ma50, ma200, width=720, height=250):
+    """Close with its two moving averages, and a hover readout at every point.
+
+    Streamlit strips script tags out of markdown, so the hover is built from SVG title
+    elements on a row of invisible bands. The browser draws the tooltip itself, which is
+    slower to appear than a charting library but cannot be stripped out.
+    """
+    values = list(close)
+    body, lo, hi = _points(values, width, height)
     if not body:
         return '<div class="sub">Not enough price history to draw a chart.</div>'
+    span = (hi - lo) or 1
+    usable = height - 12
     parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" '
-             f'preserveAspectRatio="none" style="height:{height}px">']
-    for gy in (0.25, 0.5, 0.75):
-        y = 6 + gy * (height - 12)
+             f'preserveAspectRatio="none" style="height:{height}px;cursor:crosshair">']
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        y = 6 + frac * usable
         parts.append(f'<line x1="0" y1="{y:.0f}" x2="{width}" y2="{y:.0f}" stroke="#e9edf3"/>')
 
     def overlay(series, colour, dash=''):
         if series is None:
             return
         vals = list(series)
-        if not any(v is not None and not pd.isna(v) for v in vals):
-            return
-        # scaled against the price range so the lines sit correctly against the close
-        span = (hi - lo) or 1
-        usable = height - 12
         step = width / max(1, len(vals) - 1)
         pts = [f'{i*step:.1f},{6 + (hi - v)/span*usable:.1f}'
                for i, v in enumerate(vals) if v is not None and not pd.isna(v)]
@@ -215,61 +351,272 @@ def svg_price(close, ma50, ma200, width=720, height=206):
 
     overlay(ma50, '#8fa3bf')
     overlay(ma200, '#b9c4d4', '4,3')
-    parts.append(f'<polyline fill="none" stroke="{NAVY}" stroke-width="2" '
-                 f'points="{body}"/>')
+    parts.append(f'<polyline fill="none" stroke="{NAVY}" stroke-width="2" points="{body}"/>')
+
+    idx = list(close.index)
+    bands = max(1, min(len(values), int(width // HOVER_BAND_UNITS)))
+    if bands > 1:
+        bw = width / bands
+        ma50_list = list(ma50) if ma50 is not None else []
+        ma200_list = list(ma200) if ma200 is not None else []
+        for b in range(bands):
+            i = min(len(values) - 1, int((b + 0.5) * len(values) / bands))
+            v = values[i]
+            if v is None or pd.isna(v):
+                continue
+            when = idx[i]
+            label = when.strftime('%d %b %Y') if hasattr(when, 'strftime') else str(when)
+            lines = [label, f'Close {v:,.2f}']
+            if i < len(ma50_list) and ma50_list[i] is not None and not pd.isna(ma50_list[i]):
+                lines.append(f'50 day {ma50_list[i]:,.2f}')
+            if i < len(ma200_list) and ma200_list[i] is not None and not pd.isna(ma200_list[i]):
+                lines.append(f'200 day {ma200_list[i]:,.2f}')
+            cx = b * bw + bw / 2
+            cy = 6 + (hi - v) / span * usable
+            # the box flips to the left near the right edge so it never runs off the chart
+            box_w, box_h = 150, 16 + 13 * len(lines)
+            bx = round(cx + 10 if cx < width - box_w - 14 else cx - box_w - 10, 1)
+            by = round(min(max(4, cy - box_h / 2), height - box_h - 4), 1)
+            text = ''.join(
+                f'<text x="{bx + 9}" y="{by + 18 + 13 * k}" font-size="10.5" '
+                f'font-weight="{700 if k == 0 else 500}" fill="#1a1a1a">{esc(t)}</text>'
+                for k, t in enumerate(lines))
+            parts.append(
+                f'<g class="hb">'
+                f'<rect x="{b*bw:.2f}" y="0" width="{bw:.2f}" height="{height}" '
+                f'fill="transparent"/>'
+                f'<line class="xh" x1="{cx:.1f}" y1="0" x2="{cx:.1f}" y2="{height}" '
+                f'stroke="#bf8f00" stroke-width="1" stroke-dasharray="3,3"/>'
+                f'<circle class="dot" cx="{cx:.1f}" cy="{cy:.1f}" r="3.5" fill="#1f3864" '
+                f'stroke="#fff" stroke-width="1.5"/>'
+                f'<g class="tip"><rect x="{bx}" y="{by}" width="{box_w}" height="{box_h}" '
+                f'rx="4" fill="#ffffff" stroke="#1f3864" stroke-width="1"/>{text}</g></g>')
     parts.append('</svg>')
     return ''.join(parts)
 
 
-def svg_drawdown(close, width=720, height=66):
-    """Fall from the running peak, which is what holding it actually felt like."""
-    series = pd.Series(list(close)).dropna()
+def svg_drawdown(close, width=720, height=88):
+    """Fall from the running peak, with the same hover readout as the price chart.
+
+    This is the line that says what holding the thing actually felt like, which no single
+    performance figure can.
+    """
+    series = pd.Series(list(close), index=list(close.index)).dropna()
     if len(series) < 3:
         return ''
     dd = ((series / series.cummax()) - 1) * 100
     worst = float(dd.min()) or -1
     step = width / max(1, len(dd) - 1)
-    pts = [f'{i*step:.1f},{2 + (v / worst) * (height - 8):.1f}'
-           for i, v in enumerate(dd)]
-    return (f'<svg class="chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
-            f'style="height:{height}px"><line x1="0" y1="2" x2="{width}" y2="2" '
-            f'stroke="#d8dee9"/><polyline fill="none" stroke="{DOWN}" stroke-width="1.5" '
-            f'points="{" ".join(pts)}"/></svg>')
+    pts = [f'{i*step:.1f},{4 + (v / worst) * (height - 12):.1f}' for i, v in enumerate(dd)]
+    parts = [f'<svg class="chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
+             f'style="height:{height}px;cursor:crosshair">',
+             f'<line x1="0" y1="4" x2="{width}" y2="4" stroke="#d8dee9"/>',
+             f'<polyline fill="none" stroke="{DOWN}" stroke-width="1.5" '
+             f'points="{" ".join(pts)}"/>']
+    vals, idx = list(dd), list(dd.index)
+    bands = max(1, min(len(vals), int(width // HOVER_BAND_UNITS)))
+    if bands > 1:
+        bw = width / bands
+        for b in range(bands):
+            i = min(len(vals) - 1, int((b + 0.5) * len(vals) / bands))
+            when = idx[i]
+            label = when.strftime('%d %b %Y') if hasattr(when, 'strftime') else str(when)
+            cx = b * bw + bw / 2
+            cy = 4 + (vals[i] / worst) * (height - 12)
+            lines = [label, f'{vals[i]:,.1f}% below its peak']
+            box_w, box_h = 158, 42
+            bx = round(cx + 10 if cx < width - box_w - 14 else cx - box_w - 10, 1)
+            by = 4 if cy > height / 2 else height - box_h - 4
+            text = ''.join(
+                f'<text x="{bx + 9}" y="{by + 17 + 13 * k}" font-size="10.5" '
+                f'font-weight="{700 if k == 0 else 500}" fill="#1a1a1a">{esc(t)}</text>'
+                for k, t in enumerate(lines))
+            parts.append(
+                f'<g class="hb">'
+                f'<rect x="{b*bw:.2f}" y="0" width="{bw:.2f}" height="{height}" '
+                f'fill="transparent"/>'
+                f'<line class="xh" x1="{cx:.1f}" y1="0" x2="{cx:.1f}" y2="{height}" '
+                f'stroke="#bf8f00" stroke-width="1" stroke-dasharray="3,3"/>'
+                f'<circle class="dot" cx="{cx:.1f}" cy="{cy:.1f}" r="3" fill="{DOWN}" '
+                f'stroke="#fff" stroke-width="1.5"/>'
+                f'<g class="tip"><rect x="{bx}" y="{by}" width="{box_w}" height="{box_h}" '
+                f'rx="4" fill="#ffffff" stroke="{DOWN}" stroke-width="1"/>{text}</g></g>')
+    parts.append('</svg>')
+    return ''.join(parts)
+
+
+def chart_frame(close, span_label, price_svg, dd_svg):
+    """Wrap both charts with axes that are HTML rather than SVG text.
+
+    The vertical scale sits against the plot on the right, aligned to the gridlines, and the
+    dates run underneath. Both inherit the page typeface, which SVG text inside a stretched
+    viewBox cannot do.
+    """
+    vals = [v for v in list(close) if v is not None and not pd.isna(v)]
+    if len(vals) < 2:
+        return price_svg
+    hi, lo = max(vals), min(vals)
+    mid = (hi + lo) / 2
+    n = len(close)
+    idx = list(close.index)
+
+    fmt = '%d %b %y' if span_label in ('3M', '6M') else '%b %Y'
+    if span_label in ('10Y', 'Max') and n > 2000:
+        fmt = '%Y'
+    ticks = 6
+    dates = []
+    for t in range(ticks):
+        i = int(round(t * (n - 1) / (ticks - 1)))
+        when = idx[i]
+        label = when.strftime(fmt) if hasattr(when, 'strftime') else str(when)
+        pct = t / (ticks - 1) * 100
+        align = ('left:0;text-align:left' if t == 0 else
+                 'right:0;text-align:right' if t == ticks - 1 else
+                 f'left:{pct:.2f}%;transform:translateX(-50%)')
+        dates.append(f'<span style="position:absolute;{align}">{label}</span>')
+    date_row = f'<div class="xaxis">{"".join(dates)}</div>'
+
+    # The gridlines inside the chart are drawn at y = 6 and y = height - 6, not at the very
+    # edges, so the labels have to match those positions or they float off the lines. The
+    # outer two are anchored rather than centred, because a centred label at the top hangs
+    # half of itself above the plot and gets clipped.
+    yaxis = (f'<span class="hi">{f(hi)}</span>'
+             f'<span class="mid">{f(mid)}</span>'
+             f'<span class="lo">{f(lo)}</span>')
+
+    dd_vals = ((pd.Series(vals) / pd.Series(vals).cummax()) - 1) * 100
+    worst = float(dd_vals.min())
+    dd_axis = (f'<span class="hi">0%</span>'
+               f'<span class="lo">{worst:,.0f}%</span>')
+
+    return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{price_svg}</div>'
+            f'{date_row}'
+            f'<div class="ddlabel">Fall from the running peak, same period</div>'
+            f'<div class="plot dd"><div class="yaxis">{dd_axis}</div>{dd_svg}</div>'
+            f'{date_row}')
+
+
+# Labels and formatting for every ratio the feed carries. These live here rather than in the
+# app module because this file is the one that renders them.
+LABELS = {
+    'pe': 'P/E', 'fpe': 'P/E forward', 'roic': 'ROIC', 'roce': 'ROCE', 'roa': 'ROA',
+    'roe': 'ROE', 'gross_margin': 'Gross margin', 'op_margin': 'Operating margin',
+    'net_margin': 'Net margin', 'fcf_margin': 'FCF margin',
+    'current_ratio': 'Current ratio', 'debt_equity': 'Debt / equity',
+    'interest_cover': 'Interest coverage', 'ebitda_cover': 'EBITDA coverage',
+    'altman_z': 'Altman Z', 'piotroski_f': 'Piotroski F',
+}
+PERCENT_METRICS = {'roic', 'roce', 'roa', 'roe', 'gross_margin', 'op_margin',
+                   'net_margin', 'fcf_margin'}
+
+
+def card_weight(html):
+    """A rough height for one card, in arbitrary units, good enough to balance columns.
+
+    Counting rows beats measuring characters because a table row and a paragraph of the same
+    length occupy very different heights. Charts are counted separately because they dwarf
+    everything else.
+    """
+    w = 60                                    # padding, heading, source chip
+    w += html.count('<div class="kv"') * 30
+    w += html.count('<div class="holder"') * 26
+    w += html.count('<tr') * 30
+    w += html.count('<div class="brow"') * 28
+    w += html.count('<div class="read"') * 70
+    w += html.count('<div class="cnote"') * 52
+    w += html.count('<a ') * 46              # news items wrap to two lines
+    w += html.count('<svg class="chart"') * 250
+    w += html.count('class="sub"') * 34
+    body = re.sub(r'<[^>]+>', '', html)
+    w += len(body) // 90 * 18                 # prose that is not in a row
+    return w
+
+
+# The rail is 348px against a wide column of roughly 800px, so identical content runs taller
+# there. This is the multiplier for that, measured against the rendered page rather than
+# guessed: a two column list card takes about a fifth more height in the rail.
+RAIL_STRETCH = 1.2
+# Two cards sit side by side in the spill grid, so each one adds only about half its height
+# to the wide column.
+SPILL_SHARE = 0.55
+
+
+def balance(left_cards, rail_cards):
+    """Split the rail so both columns finish at a similar point, for any company.
+
+    Content length varies with what each source returned, so a fixed split can never end
+    level. This measures both columns, then moves cards off the foot of the rail into a two
+    across grid under the wide column until the two sides are within a tenth of each other.
+
+    Only rail cards move. The wide column holds the charts and the multi column tables, and
+    those cannot be read at 348px, so they never travel.
+    """
+    left_h = sum(card_weight(c) for c in left_cards)
+    rail = list(rail_cards)
+    spill = []
+    rail_h = sum(card_weight(c) for c in rail)
+
+    def sides():
+        return rail_h * RAIL_STRETCH, left_h + sum(card_weight(c) for c in spill) * SPILL_SHARE
+
+    # move from the foot of the rail while it is the taller side by more than a tenth
+    while len(rail) > 2:
+        r, l = sides()
+        if r <= l * 1.1:
+            break
+        candidate = rail[-1]
+        # stop if moving this card would leave the wide column the taller side instead
+        after_r = (rail_h - card_weight(candidate)) * RAIL_STRETCH
+        after_l = left_h + (sum(card_weight(c) for c in spill)
+                            + card_weight(candidate)) * SPILL_SHARE
+        if abs(after_r - after_l) > abs(r - l):
+            break
+        rail.pop()
+        rail_h -= card_weight(candidate)
+        spill.insert(0, candidate)
+    return rail, spill
 
 
 # ------------------------------------------------------------------ peer bars -----------
 PEER_ROWS = [('pe', 'P/E', 'x', False), ('roe', 'Return on equity', 'pct', True),
              ('op_margin', 'Operating margin', 'pct', True),
              ('net_margin', 'Net margin', 'pct', True),
-             ('debt_equity', 'Debt / equity', 'x', False),
-             ('interest_cover', 'Interest cover', 'x', True)]
+             ('interest_cover', 'Interest cover', 'x', True),
+             ('debt_equity', 'Debt / equity', 'x', False)]
+
+# The sector median is drawn at the same point on every row. Scaling each row to its own
+# maximum put the gold marker somewhere different each time, which made the column
+# impossible to scan, and one extreme value such as an interest cover of 708x against a
+# median of 4.4x pushed the marker to zero and wasted the whole row. With the median fixed,
+# a bar past the marker beats its sector and the column reads in a single pass.
+MEDIAN_AT = 34.0
 
 
 def peer_bars(tv, stats):
-    """One row per ratio: navy bar for the company, gold line for the sector median.
-
-    Both are scaled against the same ceiling so the bar and the marker are comparable. The
-    ceiling is the wider of the company value and twice the median, which keeps a company
-    far above its sector on the chart instead of pinning it at 100%.
-    """
+    """One row per ratio: navy bar for the company, gold line for the sector median."""
     rows = []
     for key, label, kind, _higher in PEER_ROWS:
         val = tv.get(key)
         block = (stats or {}).get(key)
-        if val is None and not block:
+        if val is None or not block or not block.get('median'):
             continue
-        med = block.get('median') if block else None
-        ceiling = max(abs(val or 0), abs(med or 0) * 2, 1e-9)
-        wid = min(100, abs(val or 0) / ceiling * 100)
-        marker = min(99, abs(med or 0) / ceiling * 100) if med is not None else None
-        mark = f'<u style="left:{marker:.0f}%"></u>' if marker is not None else ''
+        med = block['median']
+        if med == 0:
+            continue
+        ratio = abs(val) / abs(med)
+        wid = min(100.0, ratio * MEDIAN_AT)
+        capped = ratio * MEDIAN_AT > 100
+        tip = (f'{label}: {minus(f(val, kind))} against a sector median of '
+               f'{minus(f(med, kind))}, {ratio:,.1f} times the median')
+        cap = ('<span style="position:absolute;right:4px;top:3px;font-size:9px;'
+               'font-weight:700;color:#fff">&#9656;</span>' if capped else '')
         rows.append(
-            f'<div class="brow"><div class="bl">{label}</div>'
-            f'<div class="bt"><i style="width:{wid:.0f}%"></i>{mark}</div>'
+            f'<div class="brow" title="{esc(tip)}"><div class="bl">{label}</div>'
+            f'<div class="bt"><i style="width:{wid:.1f}%"></i>'
+            f'<u style="left:{MEDIAN_AT:.0f}%"></u>{cap}</div>'
             f'<div class="bv num">{minus(f(val, kind))}</div>'
             f'<div class="bp num">{minus(f(med, kind))}</div></div>')
     return ''.join(rows)
-
 
 def peer_summary(tv, stats):
     """How many of the compared ratios sit in the better half of the sector."""
@@ -286,8 +633,23 @@ def peer_summary(tv, stats):
 
 
 # ------------------------------------------------------------------ the page ------------
+def span_links(spans, current, base_query):
+    """Range buttons as links rather than a widget, so they sit inside the chart card.
+
+    A Streamlit radio can only render where Streamlit puts it, which was above the whole
+    page. These carry the existing query string plus a span, so a click reloads in place.
+    """
+    out = []
+    for label in spans:
+        cls = 'sbtn on' if label == current else 'sbtn'
+        out.append(f'<a class="{cls}" href="?{base_query}span={label}" '
+                   f'target="_self">{label}</a>')
+    return f'<div class="tabs">{"".join(out)}</div>'
+
+
 def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qoe_rows,
-          qoe_verdict, capital, per_share, span_label, close, ma50, ma200, lede=''):
+          qoe_verdict, capital, per_share, span_label, close, ma50, ma200, lede='',
+          spans=None, base_query='', percentile_of=None):
     """Assemble the whole page. Every argument is already computed; this only lays out."""
     info = (yf_data or {}).get('info') or {}
     ccy = tv.get('ccy') or info.get('currency') or ''
@@ -295,8 +657,23 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
     ytd = tv.get('perf_ytd')
     tv_date = tv.get('_as_of', '')
     gics = tv.get('gics')
-    H = [CSS, '<div class="an">']
+    # what period each TradingView field covers, published alongside the feed. Without this
+    # a trailing twelve month return can sit next to an annual margin with nothing to say so.
+    periods = tv.get('_periods') or {}
 
+    def tvp(key):
+        return periods.get(key)
+
+    H = [CSS, '<div class="an">']
+    # printed at the top of every page of the PDF. The browser adds its own header with a
+    # date and a file path, which the print dialog controls rather than the page, so this
+    # gives the document a proper identification of its own.
+    # A running header for the printed page only. The company and the ticker are in the
+    # masthead immediately below, so repeating them here would just be noise. This carries
+    # the two things a printed page needs and the screen does not: whose research it is and
+    # what date the data is as at.
+    H.append(f'<div class="printhead"><span>MICS International, internal research</span>'
+             f'<span>Data as at {esc(tv.get("_as_of", ""))}</span></div>')
     # ---------- masthead ----------
     bits = [x for x in [tv.get('ticker'), gics, info.get('industry'), tv.get('country'),
                         isin, (resolution or {}).get('exchange')] if x]
@@ -395,14 +772,23 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
     H.append(f'<div class="strip">{"".join(cells)}</div>')
 
     # ---------- two column grid ----------
-    H.append('<div class="grid"><div>')
+    # Cards are collected rather than written straight out, so their heights can be measured
+    # and the two columns balanced before anything is emitted.
+    LEFT, RAIL = [], []
+
+    def left(html):
+        LEFT.append(html)
+
+    def rail(html):
+        RAIL.append(html)
+
 
     # sector comparison
     bars = peer_bars(tv, stats)
     if bars:
         better, total = peer_summary(tv, stats)
         n = (stats or {}).get('pe', {}).get('n') or (stats or {}).get('roe', {}).get('n')
-        H.append(
+        left(
             f'<div class="card"><span class="src">TradingView, {esc(tv_date)}</span>'
             f'<h2>Against its sector</h2>'
             f'<div class="sub">Navy bar is the company, gold line is the {esc(gics or "sector")} '
@@ -411,8 +797,16 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             ', not only those that cleared a screen, because a median of the winners would '
             'make everything look average.</div>'
             f'{bars}<div class="legend"><i></i>company<u></u>sector median</div>'
-            + (read(f'<b>{better} of {total}</b> compared measures sit on the better side of '
-                    f'the {esc(gics or "sector")} median.') if total else '') +
+            + (read(
+                (f'<b>Better than its sector on every measure compared.</b> ' if better == total
+                 else f'<b>Better than its sector on most of what is compared</b>, '
+                      f'{better} of {total}. ' if better > total / 2
+                 else f'<b>Behind its sector on most of what is compared</b>, only '
+                      f'{better} of {total}. ')
+                + ('The question that raises is durability rather than quality.'
+                   if better > total / 2
+                   else 'Whatever the case for owning it, these ratios are not it.'))
+               if total else '') +
             '</div>')
 
     # price and drawdown
@@ -436,21 +830,23 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<tr><td class="lab">{a}</td><td class="val num">{b}</td>'
             f'<td class="lab">{c}</td><td class="val num">{d}</td></tr>'
             for a, b, c, d in rows)
-        note = ''
+        tail = ''
         if full_dd is not None and full_dd < -50:
-            note = read(f'That <b>{minus(f(full_dd, "pct"))}</b> fall is measured across the '
-                        f'whole history Yahoo holds, starting {esc(start_txt)}. A company can '
-                        f'look excellent today and still have taken its holders through a '
-                        f'decline like that, which is why the full record is shown rather '
-                        f'than the last two years.')
-        H.append(
+            tail = read(f'<b>This has fallen further than most holders would sit through.</b> '
+                        f'A company can read well on every current ratio and still have put '
+                        f'its owners through a decline like that, which is why the full '
+                        f'record is shown here rather than the last two years.')
+        left(
             f'<div class="card"><span class="src y">Yahoo, daily</span>'
             f'<h2>Price and drawdown</h2>'
-            f'<div class="sub">Showing {esc(span_label)}. History available from '
-            f'{esc(start_txt)}. Navy is the close, the two lighter lines are the 50 and 200 '
-            f'day averages. The lower panel is the fall from each running peak.</div>'
-            f'{svg_price(close, ma50, ma200)}{svg_drawdown(close)}'
-            f'<table style="margin-top:12px">{table}</table>{note}</div>')
+            f'<div class="sub">History available from {esc(start_txt)}. Navy is the close, '
+            f'the two lighter lines are the 50 and 200 day averages. The lower panel is the '
+            f'fall from each running peak. Hover anywhere on either chart for the date and '
+            f'the level.</div>'
+            + (span_links(spans, span_label, base_query) if spans else '')
+            + chart_frame(close, span_label, svg_price(close, ma50, ma200),
+                          svg_drawdown(close))
+            + f'<table style="margin-top:16px">{table}</table>{tail}</div>')
 
     # DuPont
     if dupont_rows:
@@ -465,24 +861,31 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         driver = ('operating margin' if last['net_margin_pct'] >= 10 else
                   'asset turnover' if last['asset_turnover'] >= 1 else
                   'balance sheet leverage')
-        moved = ''
+        direction = ''
         if len(dupont_rows) > 1:
             firstr = dupont_rows[0]
             d_margin = last['net_margin_pct'] - firstr['net_margin_pct']
             d_lev = last['equity_multiplier'] - firstr['equity_multiplier']
-            moved = (f' Across the period margin moved {minus(f(d_margin, "pct"))} while the '
-                     f'equity multiplier moved {minus(f(d_lev))}.')
-        H.append(
+            if abs(d_margin) > 2 and abs(d_lev) < 0.3:
+                direction = (' The improvement came from the business rather than the '
+                             'balance sheet, which is the version worth having.'
+                             if d_margin > 0 else
+                             ' Margin has gone backwards while the balance sheet held still, '
+                             'so the pressure is operational.')
+            elif d_lev > 0.5:
+                direction = (' Leverage has risen over the period, so part of the return is '
+                             'borrowed rather than earned.')
+        left(
             f'<div class="card"><span class="src y">Yahoo, annual</span>'
             f'<h2>What drives the return on equity</h2>'
             f'<div class="sub">DuPont decomposition. The same return can come from margin, '
             f'from turnover or from leverage, and those are not the same business.</div>'
             f'<table><thead><tr><th>Year</th><th>Net margin</th><th>Asset turnover</th>'
             f'<th>Equity multiplier</th><th>ROE</th></tr></thead><tbody>{body}</tbody></table>'
-            + read(f'The latest return of <b>{minus(f(last["roe_pct"], "pct"))}</b> is driven '
-                   f'mainly by <b>{driver}</b>.{moved} A return earned on leverage is a '
-                   f'different proposition from the same return earned on margin, and the '
-                   f'headline figure cannot separate them.') + '</div>')
+            + read(f'The return is driven mainly by <b>{driver}</b>.{direction} A return '
+                   f'earned on leverage is a different proposition from the same return '
+                   f'earned on margin, and the headline figure cannot tell them '
+                   f'apart.') + '</div>')
 
     # cash conversion and capital allocation
     if qoe_rows and any(r.get('cfo_to_ni') is not None for r in qoe_rows):
@@ -501,18 +904,28 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         uses = ''
         if capital and capital.get('uses'):
             top = max(u['amount'] for u in capital['uses'])
+            cum = capital.get('cumulative_cfo')
             uses = ''.join(
-                f'<div class="brow"><div class="bl">{esc(u["use"])}</div>'
+                f'<div class="brow" title="{esc(u["use"])}: {f(u["amount"], "money")}, which is '
+                f'{f(u["pct_of_cfo"], "pct")} of the {f(cum, "money")} of operating cash flow '
+                f'generated across these years"><div class="bl">{esc(u["use"])}</div>'
                 f'<div class="bt"><i style="width:{u["amount"]/top*100:.0f}%"></i></div>'
                 f'<div class="bv num">{f(u["amount"], "money")}</div>'
                 f'<div class="bp num">{f(u["pct_of_cfo"], "pct")}</div></div>'
                 for u in capital['uses'])
-            uses = f'<div style="margin-top:14px">{uses}</div>'
-        H.append(
+            head = ('<div class="usehead"><span class="lab">Use of cash</span>'
+                    '<span class="spacer"></span>'
+                    '<span class="amt">Amount</span>'
+                    '<span class="shr">Share of<br>cash flow</span></div>')
+            uses = (f'<div style="margin-top:18px;padding-top:16px;'
+                    f'border-top:1px solid #d8dee9">{head}{uses}</div>')
+        left(
             f'<div class="card"><span class="src y">Yahoo, annual</span>'
             f'<h2>Does the profit arrive as cash, and where does it go</h2>'
             f'<div class="sub">Reported profit against operating cash flow, then what that '
-            f'cash was spent on. Percentages are of cumulative operating cash flow.</div>'
+            f'cash was spent on. In the lower block, the percentage is that use of cash as a '
+            f'share of the cumulative operating cash flow in the row above, so it answers '
+            f'how much of the cash the business generated went to each place.</div>'
             f'<table><thead><tr><th>Year</th><th>Net income</th><th>Operating cash flow</th>'
             f'<th>CFO / profit</th></tr></thead><tbody>{body}</tbody>{foot}</table>{uses}'
             + (read(qoe_verdict) if qoe_verdict else '') + '</div>')
@@ -545,7 +958,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             tail = read(f'Revenue per share grew <b>{f(abs(gap), "pct")} a year faster</b> '
                         f'than revenue, because the share count fell. Buybacks are doing '
                         f'part of the work.')
-        H.append(
+        left(
             f'<div class="card"><span class="src y">Yahoo, per share</span>'
             f'<h2>Growth the holder actually received</h2>'
             f'<div class="sub">Absolute growth against per share growth, {ps.get("years")} '
@@ -554,7 +967,32 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<table><thead><tr><th>CAGR</th><th>Absolute</th><th>Per share</th><th>Gap</th>'
             f'</tr></thead><tbody>{body}</tbody></table>{tail}</div>')
 
-    H.append('</div><div>')     # ---------- right rail ----------
+    left('</div><div>')     # ---------- right rail ----------
+
+    # ---- the ratios that appear nowhere else. P/E, ROE, both margins, interest cover and
+    #      debt to equity are in the sector bars, and Altman and Piotroski are in the strip
+    #      at the top, so listing them again would be the third time a reader saw them.
+    ALREADY_SHOWN = {'pe', 'roe', 'op_margin', 'net_margin', 'interest_cover',
+                     'debt_equity', 'altman_z', 'piotroski_f'}
+    ratio_rows = ''
+    for key, label in LABELS.items():
+        if key in ALREADY_SHOWN:
+            continue
+        v = tv.get(key)
+        if v is None:
+            continue
+        kind = ('pct' if key in PERCENT_METRICS else
+                'x' if key in ('fpe', 'current_ratio', 'ebitda_cover') else 'num')
+        peer = percentile_of(v, stats, key) if percentile_of else None
+        band = f'<span class="band">{peer["band"]}</span>' if peer else ''
+        ratio_rows += (f'<div class="kv"><span class="k">{label}'
+                       f'<span class="per">{tvp(key) or ""}</span></span>'
+                       f'<span class="v num">{minus(f(v, kind))}{band}</span></div>')
+    if ratio_rows:
+        rail(f'<div class="card"><span class="src">TradingView, {esc(tv_date)}</span>'
+                 f'<h2>The rest of the ratios</h2>'
+                 f'<div class="sub">Everything the feed carries that is not already above, '
+                 f'with the period each covers</div>{ratio_rows}</div>')
 
     val_rows = [('enterpriseToEbitda', 'EV / EBITDA', 'x'),
                 ('priceToBook', 'Price / book', 'x'),
@@ -570,8 +1008,103 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         kv += (f'<div class="kv"><span class="k">Dividend yield</span>'
                f'<span class="v num">{f(dy, "pct")}</span></div>')
     if kv:
-        H.append(f'<div class="card"><span class="src y">Yahoo</span><h2>Valuation</h2>'
-                 f'<div class="sub">Multiples TradingView does not export</div>{kv}</div>')
+        # A conclusion has to say what the numbers mean, not read them back. The figures are
+        # in the rows immediately above, so repeating them here would waste the line.
+        pe, med_pe = tv.get('pe'), stats.get('pe', {}).get('median')
+        ev, pb = info.get('enterpriseToEbitda'), info.get('priceToBook')
+        verdict = []
+        if pe is not None and med_pe:
+            ratio = pe / med_pe
+            verdict.append(
+                'Materially cheaper than its sector on earnings' if ratio < 0.7 else
+                'Cheaper than its sector on earnings' if ratio < 0.95 else
+                'Priced in line with its sector' if ratio <= 1.15 else
+                'Dearer than its sector on earnings' if ratio < 1.6 else
+                'Priced well above its sector on earnings')
+        if ev is not None:
+            verdict.append('and the cash flow multiple is undemanding' if ev < 10 else
+                           'and the cash flow multiple is reasonable' if ev < 15 else
+                           'and the cash flow multiple leaves little room for '
+                           'disappointment')
+        if pb is not None and pb > 5:
+            verdict.append('most of the value sits in the earnings rather than the assets, '
+                           'so the multiple depends on those earnings holding')
+        concl = note(sentence(verdict)) if verdict else ''
+        rail(f'<div class="card"><span class="src y">Yahoo</span><h2>Valuation</h2>'
+                 f'<div class="sub">Multiples TradingView does not export</div>{kv}'
+                 f'{concl}</div>')
+
+    # ---- returns. The feed carries four horizons and the page was showing one of them.
+    perf = [('perf_ytd', 'Year to date'), ('perf_6m', 'Six months'),
+            ('perf_1y', 'One year'), ('perf_5y', 'Five years, cumulative')]
+    rows = ''
+    for key, label in perf:
+        v = tv.get(key)
+        if v is None:
+            continue
+        cls = 'up' if v > 0 else ('down' if v < 0 else '')
+        rows += (f'<div class="kv"><span class="k">{label}</span>'
+                 f'<span class="v num {cls}">{minus(f(v, "pct"))}</span></div>')
+    five = tv.get('perf_5y')
+    if five is not None and five > -100:
+        ann = ((1 + five / 100) ** 0.2 - 1) * 100
+        cls = 'up' if ann > 0 else 'down'
+        rows += (f'<div class="kv"><span class="k">Five years, annualised</span>'
+                 f'<span class="v num {cls}">{minus(f(ann, "pct"))}</span></div>')
+    if rows:
+        one, fiveann = tv.get('perf_1y'), None
+        if five is not None and five > -100:
+            fiveann = ((1 + five / 100) ** 0.2 - 1) * 100
+        say = ''
+        ytd = tv.get('perf_ytd')
+        if one is None and ytd is not None:
+            say = ('Positive so far this year.' if ytd > 0 else
+                   'Negative so far this year.')
+        elif one is not None and fiveann is None:
+            say = ('The one year figure is the only horizon the feed carries here, so there '
+                   'is no longer record to weigh it against.')
+        if one is not None and fiveann is not None:
+            say = ('The last year has run well ahead of the longer record, so recent strength '
+                   'is doing the work.' if one > fiveann * 2 + 5 else
+                   'The last year has lagged the longer record, so the recent period is the '
+                   'weaker part of the story.' if one < fiveann - 5 else
+                   'The last year is broadly in line with the longer record, which is the '
+                   'steadier version of this.')
+        rail(f'<div class="card"><span class="src">TradingView, {esc(tv_date)}</span>'
+                 f'<h2>Returns</h2><div class="sub">Price only, dividends excluded</div>'
+                 f'{rows}' + (note(say) if say else '') + '</div>')
+
+    # ---- trend. Price against its own moving averages, which the chart shows but does not
+    #      quantify, plus the momentum reading.
+    ema50, ema200, rsi = tv.get('ema50'), tv.get('ema200'), tv.get('rsi14')
+    trend_rows = ''
+    for label, ema in (('Against the 50 day average', ema50),
+                       ('Against the 200 day average', ema200)):
+        if ema and price:
+            gap = (price / ema - 1) * 100
+            cls = 'up' if gap > 0 else 'down'
+            trend_rows += (f'<div class="kv"><span class="k">{label}</span>'
+                           f'<span class="v num {cls}">{minus(f(gap, "pct"))}</span></div>')
+    if rsi is not None:
+        trend_rows += (f'<div class="kv"><span class="k">RSI, 14 day</span>'
+                       f'<span class="v num">{f(rsi, "num", 1)}</span></div>')
+    if trend_rows:
+        say = []
+        if ema50 and ema200 and price:
+            above_both = price > ema50 and price > ema200
+            below_both = price < ema50 and price < ema200
+            say.append('Trading above both averages, so the trend is with it' if above_both
+                       else 'Trading below both averages, so the trend is against it'
+                       if below_both else 'Caught between its two averages, with no trend '
+                       'either way')
+        if rsi is not None:
+            say.append('and momentum is stretched' if rsi > 70 else
+                       'and momentum is washed out' if rsi < 30 else
+                       'and momentum is unremarkable')
+        rail(f'<div class="card"><span class="src">TradingView, {esc(tv_date)}</span>'
+                 f'<h2>Trend</h2><div class="sub">Where the price sits against its own '
+                 f'averages</div>{trend_rows}'
+                 + (note(sentence(say)) if say else '') + '</div>')
 
     target = info.get('targetMeanPrice')
     if target or info.get('recommendationKey'):
@@ -584,21 +1117,20 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
                 ('Target range', f'{f(lo)} to {f(hi)}' if lo and hi else 'n/a')]
         kv = ''.join(f'<div class="kv"><span class="k">{a}</span>'
                      f'<span class="v num">{b}</span></div>' for a, b in rows)
-        note = ''
+        tail = ''
         if lo and hi and price and (hi - lo) / price > 0.5:
-            note = (f'<div class="read" style="margin-top:11px;font-size:11.5px">A '
-                    f'{f(lo)} to {f(hi)} spread on a {f(price)} price is a wide '
-                    f'disagreement. The consensus is the midpoint of different views, not a '
-                    f'shared one.</div>')
+            tail = ('<div class="read" style="margin-top:12px;font-size:11.5px">The targets '
+                    'disagree by more than half the share price, so there is no consensus '
+                    'here, only a midpoint between two opposing views.</div>')
         elif n_an is not None and n_an < 4:
-            note = (f'<div class="read" style="margin-top:11px;font-size:11.5px">Only '
-                    f'<b>{n_an}</b> opinions sit behind that target. A consensus of three is '
-                    f'a coincidence, not a consensus.</div>')
-        H.append(f'<div class="card"><span class="src y">Yahoo</span><h2>The analyst view</h2>'
-                 f'<div class="sub">{n_an or 0} analysts covering</div>{kv}{note}</div>')
+            tail = ('<div class="read" style="margin-top:12px;font-size:11.5px">Too few '
+                    'analysts follow this for the target to carry weight. A consensus of '
+                    'three is a coincidence.</div>')
+        rail(f'<div class="card"><span class="src y">Yahoo</span><h2>The analyst view</h2>'
+                 f'<div class="sub">{n_an or 0} analysts covering</div>{kv}{tail}</div>')
 
     if tv.get('marquee'):
-        H.append(
+        rail(
             f'<div class="card"><span class="src">Dataroma, {esc(tv.get("_marquee_as_of",""))}'
             f'</span><h2>Superinvestor ownership</h2>'
             f'<div class="kv"><span class="k">Investors holding</span>'
@@ -606,7 +1138,15 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<div class="kv"><span class="k">Aggregate weight</span>'
             f'<span class="v num">{f(tv.get("marquee_weight_pct"), "pct")}</span></div>'
             f'<div class="kv"><span class="k">Cleared the screen</span>'
-            f'<span class="v">{"Yes" if tv.get("screened") else "No"}</span></div></div>')
+            f'<span class="v">{"Yes" if tv.get("screened") else "No"}</span></div>'
+            + note(
+                'A conviction position for the investors who hold it.'
+                if (tv.get('marquee_weight_pct') or 0) > 1 else
+                'A meaningful position for those who hold it.'
+                if (tv.get('marquee_weight_pct') or 0) > 0.4 else
+                'On the list, but a small position for everyone holding it. Presence alone '
+                'is weaker evidence than weight.')
+            + '</div>')
 
     pos_rows = []
     sp = info.get('shortPercentOfFloat')
@@ -620,13 +1160,27 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
     if pos_rows:
         kv = ''.join(f'<div class="kv"><span class="k">{a}</span>'
                      f'<span class="v num {c}">{b}</span></div>' for a, b, c in pos_rows)
-        note = ''
+        extra_note = ''
         if sp and sp > 0.08:
-            note = (f'<div class="read" style="margin-top:11px;font-size:11.5px">Short '
-                    f'interest of <b>{f(sp*100, "pct")} of float</b> is high. Someone has '
-                    f'done work that reaches the opposite conclusion.</div>')
-        H.append(f'<div class="card"><span class="src y">Yahoo</span><h2>Positioning</h2>'
-                 f'{kv}{note}</div>')
+            extra_note = (f'<div class="read" style="margin-top:12px;font-size:11.5px">Short '
+                          f'interest of <b>{f(sp*100, "pct")} of float</b> is high. Someone '
+                          f'has done work that reaches the opposite conclusion.</div>')
+        inst = info.get('heldPercentInstitutions')
+        say = []
+        if inst is not None:
+            say.append(
+                'The register is already full of institutions, so the next buyer has to come '
+                'from somewhere else' if inst > 0.8 else
+                'Institutions hold a normal share, leaving room for new money' if inst > 0.4
+                else 'Thinly held by institutions, which cuts both ways on liquidity')
+        if sp is not None:
+            say.append('and there is a real short case worth reading before acting'
+                       if sp > 0.08 else
+                       'and the bears are not making much of a case' if sp < 0.03 else
+                       'and short interest is unremarkable')
+        concl = note(sentence(say)) if say else ''
+        rail(f'<div class="card"><span class="src y">Yahoo</span><h2>Positioning</h2>'
+                 f'{kv}{extra_note}{concl}</div>')
 
     holders = (yf_data or {}).get('institutional_holders')
     if holders is not None and hasattr(holders, 'empty') and not holders.empty:
@@ -642,7 +1196,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             rows += (f'<div class="holder"><span class="n">{nm}</span>'
                      f'<span class="p num">{f(pv, "pct")}</span></div>')
         if rows:
-            H.append(f'<div class="card"><span class="src y">Yahoo</span>'
+            rail(f'<div class="card"><span class="src y">Yahoo</span>'
                      f'<h2>Largest holders</h2>{rows}'
                      f'<div class="sub" style="margin:11px 0 0">Index funds included. The '
                      f'Dataroma block is a different question, not who owns it but who '
@@ -666,10 +1220,21 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         href = f' href="{esc(link)}" target="_blank" rel="noopener"' if link else ''
         items += f'<a{href}>{esc(title)}<div class="m">{esc(m)}</div></a>'
     if items:
-        H.append(f'<div class="card news"><span class="src y">Yahoo</span>'
+        rail(f'<div class="card news"><span class="src y">Yahoo</span>'
                  f'<h2>Recent coverage</h2>{items}</div>')
 
-    H.append('</div></div>')    # close rail and grid
+    rail_cards, spill = balance(LEFT, RAIL)
+    spill_html = ''
+    if spill:
+        spill_html = (f'<div class="spill">{"".join(spill)}</div>')
+    # sticky only when the rail is the shorter side, since a sticky column that is itself
+    # taller than the viewport would fight the scroll
+    left_total = sum(card_weight(c) for c in LEFT) + \
+        sum(card_weight(c) for c in spill) * SPILL_SHARE
+    rail_total = sum(card_weight(c) for c in rail_cards) * RAIL_STRETCH
+    rail_class = 'rail' if rail_total < left_total * 0.92 else ''
+    H.append('<div class="grid"><div>' + ''.join(LEFT) + spill_html
+             + f'</div><div class="{rail_class}">' + ''.join(rail_cards) + '</div></div>')    # close rail and grid
 
     # ---------- the reading, last, after the evidence ----------
     supports, against, verify = assessment(tv, stats, forensics, risk, dupont_rows,
@@ -688,7 +1253,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         + '</div><div class="disc"><b>The author\'s own reading, for internal research.</b> '
           'Not investment advice, not a recommendation, and it takes no account of any '
           'person\'s objectives or circumstances. Figures come from third party sources, '
-          'not independently verified.</div></div>')
+          'believed reliable but not independently verified.</div></div>')
 
     # ---------- sources ----------
     H.append(
