@@ -990,7 +990,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
                        f'<span class="v num">{minus(f(v, kind))}{band}</span></div>')
     if ratio_rows:
         rail(f'<div class="card"><span class="src">TradingView, {esc(tv_date)}</span>'
-                 f'<h2>The rest of the ratios</h2>'
+                 f'<h2>Rest of Ratio</h2>'
                  f'<div class="sub">Everything the feed carries that is not already above, '
                  f'with the period each covers</div>{ratio_rows}</div>')
 
