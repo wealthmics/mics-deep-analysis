@@ -383,6 +383,18 @@ CSS = f"""
   .dv-mast .facts b {{ color:{INK}; font-weight:600; }}
   .dv-mast .facts .dot {{ color:{INK_MUTE}; margin:0 8px; }}
 
+  /* landing page header: used by render_landing but had no styling at all, so the
+     title and its source/date pills rendered as plain unstyled text with none of the
+     page's palette. Same card treatment as the masthead, so the landing screen and the
+     analysis screen read as one app on one theme rather than two different tools. */
+  .dv-head {{ background:{SURFACE}; border:1px solid {LINE}; border-radius:10px;
+              padding:22px 24px 20px; margin-bottom:16px; }}
+  .dv-head h1 {{ margin:0; font-size:26px; font-weight:640; line-height:1.15; color:{INK}; }}
+  .dv-head .sub {{ margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; }}
+  .dv-pill {{ display:inline-block; font-size:11px; font-weight:600; letter-spacing:.03em;
+             padding:4px 11px; border-radius:999px; background:#eef2f7; color:{NAVY};
+             border:1px solid {LINE}; }}
+
   /* the price block sits right of the name, right-aligned like a quote screen */
   .dv-quote {{ text-align:right; }}
   .dv-quote .px {{ font-size:30px; font-weight:640; line-height:1.1;
