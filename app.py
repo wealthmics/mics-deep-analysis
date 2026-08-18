@@ -515,9 +515,14 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
             st.info(f'Nothing matching "{query}". This feed carries screened names and '
                     f'marquee holdings, not the whole 30,000 stock universe, so a company '
                     f'that failed every screen will not be here.')
+        if any(e.get('marquee') for _, e in hits[:12]):
+            st.caption('\u2605 held by at least one investor tracked by Dataroma')
         for isin, e in hits[:12]:
             row = st.columns([3, 2, 2, 2, 1.5])
-            flag = ' held' if e.get('marquee') else ''
+            # A star rather than the word, which is how this always read. The word sat in the
+            # same weight and size as the ticker beside it and had to be read before it could
+            # be dismissed, on every row, whether or not it was the thing being looked for.
+            flag = ' \u2605' if e.get('marquee') else ''
             row[0].markdown(f"**{e.get('ticker')}**{flag}  \n{e.get('name')}")
             row[1].markdown(f"{e.get('gics') or ''}  \n{e.get('country') or ''}")
             row[2].markdown(f"{pg.f(e.get('mcap'), 'money')}  \nmarket cap")

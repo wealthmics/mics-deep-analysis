@@ -100,12 +100,13 @@ at the foot. Nothing is moved and nothing is invented, and the two sides end tog
 whatever each company's data happens to contain. */
 .an .grid{display:flex;align-items:stretch;margin-top:12px}
 /* Both columns finish level, whichever of the two happens to be shorter.
-Spreading only the rail assumed the rail was always the shorter side. It is not: a company
-with a full rail and a thin statement history leaves the main column ending early and a
-large empty patch below it. So both columns are spread columns. Each keeps its 12px gap as
-a margin and the leftover height is shared out on top of that, which means the gaps can
-grow but never close up, and no card is moved or invented to fill the space. */
-.an .grid>div{display:flex;flex-direction:column;justify-content:space-between}
+The leftover height used to be pushed into the gaps between cards, which made the spacing
+change from one pair of cards to the next and read as a fault rather than a layout. It now
+goes into the cards themselves: every card grows by an equal share, so the gaps stay at a
+constant 12px the whole way down and the extra height shows up as a little more room at the
+foot of each card. Nothing is moved and nothing is invented to fill the space. */
+.an .grid>div{display:flex;flex-direction:column}
+.an .grid>div>.card{flex:1 1 auto}
 /* The main column is the one that yields.
 Its basis was auto, meaning the natural width of the widest table inside it, which on this
 page is very wide. That made the total basis of the two columns exceed the row, and flex
