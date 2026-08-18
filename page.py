@@ -33,205 +33,304 @@ UP, DOWN, MID = '#12703a', '#a5201a', '#8a6300'
 
 CSS = """
 <style>
- .an *{box-sizing:border-box}
- .an{font:14px/1.45 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;
-     max-width:1180px;margin:0 auto}
- .an .num{font-variant-numeric:tabular-nums}
- .an .mast{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:22px 26px;
-     display:flex;justify-content:space-between;align-items:flex-start;gap:28px}
- .an .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
-     color:#bf8f00;margin-bottom:8px}
- .an .mast h1{margin:0;font-size:27px;font-weight:650;line-height:1.15;letter-spacing:-.01em}
- .an .meta{margin-top:8px;font-size:12.5px;font-weight:500}
- .an .meta b{font-weight:700}
- .an .meta .sep{color:#1f3864;margin:0 7px;font-weight:700}
- .an .quote{text-align:right;white-space:nowrap}
- .an .quote .px{font-size:31px;font-weight:650;line-height:1;letter-spacing:-.01em}
- .an .quote .px span{font-size:13px;font-weight:600;color:#1f3864;margin-left:5px}
- .an .quote .chg{margin-top:5px;font-size:13px;font-weight:700}
- .an .quote .rng{margin-top:11px;font-size:11px;font-weight:600;color:#1f3864}
- .an .bar52{margin-top:5px;width:200px;height:5px;border-radius:2px;background:#e9edf3;
-     border:1px solid #d8dee9;position:relative}
- .an .bar52 i{position:absolute;top:-2px;width:3px;height:9px;background:#1f3864;border-radius:1px}
- .an .up{color:#12703a} .an .down{color:#a5201a} .an .mid{color:#8a6300}
- .an .strip{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:#d8dee9;
-     border:1px solid #d8dee9;border-radius:8px;overflow:hidden;margin-top:12px}
- .an .strip>div{background:#fff;padding:15px 16px 16px}
- .an .strip .k{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
-     color:#1f3864}
- .an .strip .v{margin-top:6px;font-size:21px;font-weight:650;line-height:1}
- .an .strip .v small{font-size:12px;font-weight:600;color:#1f3864}
- .an .strip .n{margin-top:6px;font-size:10.5px;font-weight:500;line-height:1.4}
- .an .pill{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9.5px;
-     font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:4px}
- .an .pill.g{background:#e3f1e8;color:#12703a} .an .pill.a{background:#fbf1dc;color:#8a6300}
- .an .pill.r{background:#fbe6e4;color:#a5201a} .an .pill.n{background:#e9edf3;color:#1f3864}
- .an .grid{display:grid;grid-template-columns:1fr 348px;gap:12px;margin-top:12px;
-     align-items:start}
- /* the rail travels with the scroll when the wide column is the longer of the two, so the
-    reference figures stay in view and no dead space is left at the foot */
- .an .rail{position:sticky;top:14px}
- @media(max-width:940px){.an .rail{position:static}}
- @media print{.an .rail{position:static}}
- /* rail cards that were moved under the wide column, laid two across so they fill the
-    space rather than leaving a ragged edge */
- .an .spill{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
- @media(max-width:940px){.an .spill{grid-template-columns:1fr}}
- @media(max-width:940px){.an .grid{grid-template-columns:1fr}
-     .an .strip{grid-template-columns:repeat(3,1fr)}}
- .an .card{background:#fff;border:1px solid #d8dee9;border-radius:8px;
-     padding:20px 24px 22px;margin-bottom:12px}
- .an .card h2{margin:0 0 3px;font-size:13.5px;font-weight:700;letter-spacing:-.01em}
- .an .card .sub{font-size:11.5px;font-weight:500;margin-bottom:16px;line-height:1.5}
- .an .src{float:right;font-size:9.5px;font-weight:700;letter-spacing:.05em;
-     text-transform:uppercase;padding:2px 7px;border-radius:3px;background:#e8edf5;color:#1f3864}
- .an .src.y{background:#f7f1de;color:#bf8f00}
- .an table{width:100%;border-collapse:collapse}
- .an th,.an td{text-align:right;padding:9px 0;font-size:12.5px;
-     border-bottom:1px solid #e9edf3}
- .an th{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#1f3864}
- .an th:first-child,.an td:first-child{text-align:left}
- .an tr:last-child td{border-bottom:none}
- .an td.lab{font-weight:500}
- .an td.val{font-weight:700;font-variant-numeric:tabular-nums}
- .an tfoot td{border-top:1.5px solid #1f3864;border-bottom:none;font-weight:700;padding-top:9px}
- .an .brow{display:flex;align-items:center;gap:10px;margin:9px 0}
- .an .brow .bl{width:132px;font-size:12px;font-weight:600;flex:none}
- .an .brow .bt{flex:1;height:19px;background:#f4f7fb;border:1px solid #d8dee9;border-radius:3px;
-     position:relative;overflow:hidden}
- .an .brow .bt i{position:absolute;left:0;top:0;bottom:0;background:#1f3864}
- .an .brow .bt u{position:absolute;top:-1px;bottom:-1px;width:2px;background:#bf8f00;
-     text-decoration:none}
- .an .brow .bv{width:88px;text-align:right;font-size:12px;font-weight:700;
-     font-variant-numeric:tabular-nums;flex:none}
- .an .brow .bp{width:64px;text-align:right;font-size:11px;font-weight:600;color:#1f3864;flex:none}
- /* mirrors the bar row below it column for column, or the headings sit over the wrong
-    things: 132px label, the flexible bar, 88px amount, 64px share */
- .an .usehead{display:flex;align-items:flex-end;gap:10px;font-size:9.5px;font-weight:700;
-     letter-spacing:.06em;text-transform:uppercase;color:#1f3864;margin-bottom:6px;
-     padding-bottom:5px;border-bottom:1px solid #e9edf3}
- .an .usehead .lab{width:132px;flex:none}
- .an .usehead .spacer{flex:1}
- .an .usehead .amt{width:88px;text-align:right;flex:none}
- .an .usehead .shr{width:64px;text-align:right;flex:none;line-height:1.2}
- .an .legend{margin-top:11px;font-size:10.5px;font-weight:500}
- .an .legend i{display:inline-block;width:9px;height:9px;background:#1f3864;border-radius:2px;
-     margin-right:4px;vertical-align:-1px}
- .an .legend u{display:inline-block;width:2px;height:11px;background:#bf8f00;margin:0 4px 0 12px;
-     vertical-align:-2px;text-decoration:none}
- .an .read{margin-top:16px;padding:14px 16px;background:#f4f7fb;border:1px solid #d8dee9;
-     border-left:3px solid #1f3864;border-radius:5px;font-size:12.5px;font-weight:500;
-     line-height:1.6}
- .an .read b{font-weight:700}
- .an .cnote{margin-top:12px;padding-top:11px;border-top:1px solid #e9edf3;font-size:11.5px;
-     font-weight:500;line-height:1.55}
- .an .cnote b{font-weight:700}
- .an .chart{width:100%;display:block;cursor:crosshair}
+.an *{box-sizing:border-box}
+/* No width cap. It was 1180px, then 1380px, and on a laptop that is wider than the cap the
+leftover shows up as an empty band beside the page, which is what was being reported. The
+page now takes whatever width its container gives it. The main column carries the long
+paragraphs, so it is the one that would suffer from an unlimited line length, and it is
+capped on its own below instead of capping the whole page. */
+.an{font:14px/1.45 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;
+max-width:none;margin:0}
+.an .num{font-variant-numeric:tabular-nums}
+.an .mast{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:22px 26px;
+display:flex;justify-content:space-between;align-items:flex-start;gap:28px}
+.an .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
+color:#bf8f00;margin-bottom:8px}
+.an a.back{color:#1f3864;text-decoration:none;border-bottom:1px solid #d8dee9}
+.an a.back:hover{border-bottom-color:#1f3864}
+@media print{.an a.back{display:none}}
+.an .mast h1{margin:0;font-size:27px;font-weight:650;line-height:1.15;letter-spacing:-.01em}
+.an .meta{margin-top:8px;font-size:12.5px;font-weight:500}
+.an .meta b{font-weight:700}
+.an .meta .sep{color:#1f3864;margin:0 7px;font-weight:700}
+.an .quote{text-align:right;white-space:nowrap}
+.an .quote .px{font-size:31px;font-weight:650;line-height:1;letter-spacing:-.01em}
+.an .quote .px span{font-size:13px;font-weight:600;color:#1f3864;margin-left:5px}
+.an .quote .chg{margin-top:5px;font-size:13px;font-weight:700}
+.an .quote .rng{margin-top:11px;font-size:11px;font-weight:600;color:#1f3864}
+.an .bar52{margin-top:5px;width:200px;height:5px;border-radius:2px;background:#e9edf3;
+border:1px solid #d8dee9;position:relative}
+.an .bar52 i{position:absolute;top:-2px;width:3px;height:9px;background:#1f3864;border-radius:1px}
+.an .up{color:#12703a} .an .down{color:#a5201a} .an .mid{color:#8a6300}  /* down and mid are applied from Python, not always present in a given page */
+/* The strip of forensic scores.
+Flex rather than grid, and hairlines drawn as box shadows rather than a 1px grid gap. Grid
+gaps need grid; a renderer that does not have it drops every cell onto its own line, which
+is how six scores ended up in a column down one side of the page. Each cell paints its own
+left and top hairline in the same colour as the container border, so the cells on the edge
+have theirs hidden under the border and the ones in the middle divide the row. */
+.an .strip{display:flex;flex-wrap:wrap;background:#d8dee9;
+border:1px solid #d8dee9;border-radius:8px;overflow:hidden;margin-top:12px}
+.an .strip>div{background:#fff;padding:15px 16px 16px;flex:1 1 0;min-width:145px;
+box-shadow:-1px 0 0 #d8dee9,0 -1px 0 #d8dee9}
+.an .strip .k{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+color:#1f3864}
+.an .strip .v{margin-top:6px;font-size:21px;font-weight:650;line-height:1}
+.an .strip .v small{font-size:12px;font-weight:600;color:#1f3864}
+.an .strip .n{margin-top:6px;font-size:10.5px;font-weight:500;line-height:1.4}
+.an .pill{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9.5px;
+font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-right:4px}
+.an .pill.g{background:#e3f1e8;color:#12703a} .an .pill.a{background:#fbf1dc;color:#8a6300}
+.an .pill.r{background:#fbe6e4;color:#a5201a} .an .pill.n{background:#e9edf3;color:#1f3864}
+/* Flex, not grid, and margins rather than gap. Grid and gap are both fine in a current
+browser, but the saved preview file gets opened in whatever is to hand, and an older engine
+that does not know grid falls back to stacked blocks, which is the exact fault being fixed.
+Flex with a negative margin gutter degrades to a row everywhere. */
+.an .counts{display:flex;flex-wrap:wrap;margin:14px -6px 0}
+.an .counts>.card{flex:1 1 0;min-width:180px;margin:0 6px 12px;display:flex;
+flex-direction:column}
+.an .counts>.card .big{margin-top:6px;font-size:26px;font-weight:650;line-height:1;
+letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.an .counts>.card .smallnote{margin-top:auto;padding-top:8px}
+@media print{.an .counts>.card{min-width:0}}
+/* The body of the company page: a wide column and a 348px rail.
+Both columns finish level without any card changing place. The rail is a flex item so it
+already stretches to the height of the taller side; laying its own cards out as a spread
+column means the extra height is shared between the gaps instead of pooling as dead space
+at the foot. Nothing is moved and nothing is invented, and the two sides end together
+whatever each company's data happens to contain. */
+.an .grid{display:flex;align-items:stretch;margin-top:12px}
+/* Both columns finish level, whichever of the two happens to be shorter.
+Spreading only the rail assumed the rail was always the shorter side. It is not: a company
+with a full rail and a thin statement history leaves the main column ending early and a
+large empty patch below it. So both columns are spread columns. Each keeps its 12px gap as
+a margin and the leftover height is shared out on top of that, which means the gaps can
+grow but never close up, and no card is moved or invented to fill the space. */
+.an .grid>div{display:flex;flex-direction:column;justify-content:space-between}
+/* The main column is the one that yields.
+Its basis was auto, meaning the natural width of the widest table inside it, which on this
+page is very wide. That made the total basis of the two columns exceed the row, and flex
+resolves that by shrinking both in proportion to their basis. So every time the rail's basis
+went up it was handed a larger share of the shrinking and came out the same or narrower,
+which is why raising the number kept doing nothing. Basis 0 here, no shrink on the rail. */
+.an .grid>div:first-child{flex:1 1 0;min-width:0}
+/* The rail gives ground before it gives up.
+It used to be a fixed 348px that stacked under the main column the moment the window fell
+below 940px, and a preview opened in a narrow pane or a phone therefore showed the whole
+page down one side. It now shrinks to 240px first and only stacks below 700px, where two
+columns genuinely stop being readable. */
+/* The rail is a share of the width rather than a fixed number of pixels, so a wider window
+widens the rail instead of pushing everything into the main column and leaving the right of
+the screen bare. The bounds stop it collapsing on a small laptop and stop it turning into a
+second main column on a large monitor. */
+.an .grid>div:last-child{flex:0 0 36%;min-width:300px;max-width:760px;margin-left:12px}
+.an .grid>div>.card{margin-bottom:12px}
+.an .grid>div>.card:last-child{margin-bottom:0}
+@media(max-width:700px){.an .grid,.an .grid>div{display:block}
+.an .grid>div:last-child{min-width:0;margin-left:0}
+.an .grid>div>.card:last-child{margin-bottom:12px}}
+@media print{.an .grid,.an .grid>div{display:block}
+.an .grid>div:last-child{min-width:0;margin-left:0}
+.an .grid>div>.card:last-child{margin-bottom:12px}}
+@media(max-width:940px){.an .strip>div{flex-basis:33.33%;min-width:33.33%}}
+@media(max-width:700px){.an .vcols>.vcol{flex-basis:100%;min-width:100%}}
+@media(max-width:560px){.an .strip>div{flex-basis:50%;min-width:50%}}
+.an .card{background:#fff;border:1px solid #d8dee9;border-radius:8px;
+padding:20px 24px 22px;margin-bottom:12px}
+/* Line length. The prose was capped at 110 characters, which on a wide screen left the
+paragraph ending halfway across a card that was otherwise full width, and the card read as
+half empty. The text now runs the full width of whatever card holds it, the same as the
+tables and the bars above and below it. */
+.an .card .sub,.an .read,.an .cnote,.an .smallnote,.an .view .lede,
+.an .body-text{max-width:none}
+/* The footer and the disclaimer are text blocks that also draw a rule or a border, so
+capping the block itself would shorten the rule with it. The cap goes on the lines instead,
+by way of the text indent that the wide reading measure needs anyway. */
+.an .disc,.an .foot{text-wrap:pretty}
+.an .disc>b:first-child,.an .foot>b:first-child{display:inline}
+.an .card h2{margin:0 0 3px;font-size:13.5px;font-weight:700;letter-spacing:-.01em}
+.an .card .sub{font-size:11.5px;font-weight:500;margin-bottom:16px;line-height:1.5}
+.an .src{float:right;font-size:9.5px;font-weight:700;letter-spacing:.05em;
+text-transform:uppercase;padding:2px 7px;border-radius:3px;background:#e8edf5;color:#1f3864}
+.an .src.y{background:#f7f1de;color:#bf8f00}
+/* In the rail there is rarely room for a source badge and a heading on one line, and a
+floated badge wider than the space left pushed the heading into a ragged second line. Inside
+the rail the badge sits on its own line above the heading instead. */
+.an .grid>div:last-child .src{float:none;display:inline-block;margin-bottom:7px}
+.an table{width:100%;border-collapse:collapse}
+.an th,.an td{text-align:right;padding:9px 0;font-size:12.5px;
+border-bottom:1px solid #e9edf3}
+.an th{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#1f3864}
+.an th:first-child,.an td:first-child{text-align:left}
+.an tr:last-child td{border-bottom:none}
+.an td.lab{font-weight:500}
+.an td.val{font-weight:700;font-variant-numeric:tabular-nums}
+.an tfoot td{border-top:1.5px solid #1f3864;border-bottom:none;font-weight:700;padding-top:9px}
+.an .brow{display:flex;align-items:center;gap:10px;margin:9px 0}
+.an .brow .bl{width:132px;font-size:12px;font-weight:600;flex:none}
+.an .brow .bt{flex:1;height:19px;background:#f4f7fb;border:1px solid #d8dee9;border-radius:3px;
+position:relative;overflow:hidden}
+.an .brow .bt i{position:absolute;left:0;top:0;bottom:0;background:#1f3864}
+.an .brow .bt u{position:absolute;top:-1px;bottom:-1px;width:2px;background:#bf8f00;
+text-decoration:none}
+.an .brow .bv{width:88px;text-align:right;font-size:12px;font-weight:700;
+font-variant-numeric:tabular-nums;flex:none}
+.an .brow .bp{width:64px;text-align:right;font-size:11px;font-weight:600;color:#1f3864;flex:none}
+/* mirrors the bar row below it column for column, or the headings sit over the wrong
+things: 132px label, the flexible bar, 88px amount, 64px share */
+.an .usehead{display:flex;align-items:flex-end;gap:10px;font-size:9.5px;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:#1f3864;margin-bottom:6px;
+padding-bottom:5px;border-bottom:1px solid #e9edf3}
+.an .usehead .lab{width:132px;flex:none}
+.an .usehead .spacer{flex:1}
+.an .usehead .amt{width:88px;text-align:right;flex:none}
+.an .usehead .shr{width:64px;text-align:right;flex:none;line-height:1.2}
+.an .legend{margin-top:11px;font-size:10.5px;font-weight:500}
+.an .legend i{display:inline-block;width:9px;height:9px;background:#1f3864;border-radius:2px;
+margin-right:4px;vertical-align:-1px}
+.an .legend u{display:inline-block;width:2px;height:11px;background:#bf8f00;margin:0 4px 0 12px;
+vertical-align:-2px;text-decoration:none}
+.an .read{margin-top:16px;padding:14px 16px;background:#f4f7fb;border:1px solid #d8dee9;
+border-left:3px solid #1f3864;border-radius:5px;font-size:12.5px;font-weight:500;
+line-height:1.6}
+.an .read b{font-weight:700}
+.an .cnote{margin-top:12px;padding-top:11px;border-top:1px solid #e9edf3;font-size:11.5px;
+font-weight:500;line-height:1.55}
+.an .cnote b{font-weight:700}
+/* A standalone heading between blocks. The company page puts every heading inside a card,
+but the landing page has Streamlit widgets between its sections and needs a rule of its
+own to separate them. */
+.an .sec{display:flex;align-items:baseline;gap:12px;margin:26px 0 10px}
+.an .sec .t{font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+color:#1f3864;white-space:nowrap}
+.an .sec .r{flex:1;height:1px;background:#d8dee9}
+.an .sec .n{font-size:11px;font-weight:500;color:#1f3864;white-space:nowrap}
+.an .smallnote{font-size:11.5px;font-weight:500;line-height:1.6;margin-top:10px}
+.an .chart{width:100%;display:block;cursor:crosshair}
 
- /* Chart axes.
-    The labels are HTML rather than SVG text, because the chart SVG is stretched with
-    preserveAspectRatio="none" and any text inside it stretches with it, which made the
-    numbers look like a different typeface from the page.
-    The plot reserves room on the right for the vertical scale so the labels sit beside the
-    chart instead of on top of it, and the horizontal row below is positioned by percentage
-    against the same width as the plot area. */
- .an .plot{position:relative;padding-right:54px}
- .an .yaxis{position:absolute;right:0;top:0;bottom:0;width:50px;pointer-events:none}
- .an .yaxis span{position:absolute;right:0;font-size:10px;font-weight:600;color:#1f3864;
-     white-space:nowrap;line-height:1}
- /* the outer two are anchored to the plot edges. Centring all three hung half of the top
-    label above the chart, where it was clipped. */
- .an .yaxis .hi{top:1px}
- .an .yaxis .mid{top:50%;transform:translateY(-50%)}
- .an .yaxis .lo{bottom:1px}
- .an .xaxis{position:relative;display:block;height:15px;margin:6px 54px 0 0;
-     font-size:10px;font-weight:600;color:#1f3864}
- .an .xaxis span{position:absolute;top:0;white-space:nowrap}
- .an .ddlabel{clear:both;font-size:10px;font-weight:700;letter-spacing:.07em;
-     text-transform:uppercase;color:#1f3864;margin:20px 0 8px;padding-top:16px;
-     border-top:1px solid #e9edf3}
- /* Hover readout. A native SVG title waits on the browser's own delay and often never
-    fires, so the tooltip is drawn inside the SVG and revealed with CSS. No script is
-    involved, which matters because Streamlit strips script tags out of markdown. */
- .an .hb .tip,.an .hb .xh,.an .hb .dot{opacity:0;transition:opacity .06s}
- .an .hb .tip{pointer-events:none}
- .an .hb:hover .tip,.an .hb:hover .xh,.an .hb:hover .dot{opacity:1}
- .an .tabs{display:flex;gap:5px;margin-bottom:11px;flex-wrap:wrap}
- .an .sbtn{border:1px solid #d8dee9;background:#fff;color:#1f3864;font-size:11px;
-     font-weight:700;padding:5px 11px;border-radius:4px;text-decoration:none;display:inline-block}
- .an .sbtn:hover{border-color:#1f3864}
- .an .sbtn.on{background:#1f3864;border-color:#1f3864;color:#fff}
- /* Every row in the rail is the same two column grid, so the values line up down the
-    whole column instead of each card finding its own right edge. */
- .an .kv{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:baseline;
-     padding:8px 0;font-size:12.5px;border-bottom:1px solid #e9edf3}
- .an .kv:last-child{border-bottom:none}
- .an .kv .k{font-weight:500}
- .an .kv .v{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;
-     white-space:nowrap}
- .an .kv .per{display:block;font-size:9.5px;font-weight:600;color:#1f3864;
-     letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
- .an .kv .band{display:block;font-size:9.5px;font-weight:600;color:#1f3864;margin-top:2px;
-     text-transform:lowercase;letter-spacing:0}
- .an .holder{display:grid;grid-template-columns:1fr auto;gap:12px;font-size:12px;
-     padding:7px 0;border-bottom:1px solid #e9edf3}
- .an .holder:last-child{border-bottom:none}
- .an .holder .n{font-weight:500}
- .an .holder .p{font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
- .an .news a{display:block;font-size:12.5px;font-weight:600;color:#1a1a1a;
-     text-decoration:none;padding:10px 0;border-bottom:1px solid #e9edf3;line-height:1.45}
- .an .news a:last-child{border-bottom:none}
- .an .news .m{font-size:10.5px;font-weight:600;color:#1f3864;margin-top:3px}
- .an .body-text{font-size:12.5px;font-weight:500;line-height:1.6;margin-top:10px}
- .an .view{background:#fff;border:1px solid #d8dee9;border-top:3px solid #1f3864;
-     border-radius:8px;padding:22px 24px 24px;margin-top:14px}
- .an .view h2{margin:0;font-size:14px;font-weight:700}
- .an .view .lede{font-size:13px;font-weight:500;line-height:1.65;margin:12px 0 0}
- .an .view .lede b{font-weight:700}
- .an .vcols{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:22px}
- @media(max-width:940px){.an .vcols{grid-template-columns:1fr}}
- .an .vcol{border:1px solid #d8dee9;border-radius:6px;padding:15px 17px 17px;background:#f4f7fb}
- .an .vcol.s{border-left:3px solid #12703a}
- .an .vcol.c{border-left:3px solid #8a6300}
- .an .vcol.v{border-left:3px solid #1f3864}
- .an .vcol h3{margin:0 0 12px;font-size:10px;font-weight:700;letter-spacing:.08em;
-     text-transform:uppercase;padding-bottom:9px;border-bottom:1px solid #d8dee9}
- .an .vcol ul{margin:0;padding-left:17px}
- .an .vcol li{font-size:12px;font-weight:500;line-height:1.6;margin-bottom:10px}
- .an .vcol li:last-child{margin-bottom:0}
- .an .disc{margin-top:20px;padding-top:15px;border-top:1px solid #d8dee9;font-size:10.5px;
-     font-weight:500;line-height:1.6}
- .an .disc b{font-weight:700}
- .an .foot{margin-top:16px;padding:15px 18px;background:#fff;border:1px solid #d8dee9;
-     border-radius:8px;font-size:11px;font-weight:500;line-height:1.75}
- .an .foot b{font-weight:700}
- .an .printhead{display:none}
- @media print{.an .printhead{display:flex !important;justify-content:space-between;
-     align-items:baseline;font-size:9.5px;font-weight:700;letter-spacing:.07em;
-     text-transform:uppercase;color:#1f3864;border-bottom:1px solid #1f3864;
-     padding-bottom:7px;margin-bottom:12px}}
+/* Chart axes.
+The labels are HTML rather than SVG text, because the chart SVG is stretched with
+preserveAspectRatio="none" and any text inside it stretches with it, which made the
+numbers look like a different typeface from the page.
+The plot reserves room on the right for the vertical scale so the labels sit beside the
+chart instead of on top of it, and the horizontal row below is positioned by percentage
+against the same width as the plot area. */
+.an .plot{position:relative;padding-right:54px}
+.an .yaxis{position:absolute;right:0;top:0;bottom:0;width:50px;pointer-events:none}
+.an .yaxis span{position:absolute;right:0;font-size:10px;font-weight:600;color:#1f3864;
+white-space:nowrap;line-height:1}
+/* the outer two are anchored to the plot edges. Centring all three hung half of the top
+label above the chart, where it was clipped. */
+.an .yaxis .hi{top:1px}
+.an .yaxis .mid{top:50%;transform:translateY(-50%)}
+.an .yaxis .lo{bottom:1px}
+.an .xaxis{position:relative;display:block;height:15px;margin:6px 54px 0 0;
+font-size:10px;font-weight:600;color:#1f3864}
+.an .xaxis span{position:absolute;top:0;white-space:nowrap}
+.an .ddlabel{clear:both;font-size:10px;font-weight:700;letter-spacing:.07em;
+text-transform:uppercase;color:#1f3864;margin:20px 0 8px;padding-top:16px;
+border-top:1px solid #e9edf3}
+/* Hover readout. A native SVG title waits on the browser's own delay and often never
+fires, so the tooltip is drawn inside the SVG and revealed with CSS. No script is
+involved, which matters because Streamlit strips script tags out of markdown. */
+.an .hb .tip,.an .hb .xh,.an .hb .dot{opacity:0;transition:opacity .06s}
+.an .hb .tip{pointer-events:none}
+.an .hb:hover .tip,.an .hb:hover .xh,.an .hb:hover .dot{opacity:1}
+.an .tabs{display:flex;gap:5px;margin-bottom:11px;flex-wrap:wrap}
+.an .sbtn{border:1px solid #d8dee9;background:#fff;color:#1f3864;font-size:11px;
+font-weight:700;padding:5px 11px;border-radius:4px;text-decoration:none;display:inline-block}
+.an .sbtn:hover{border-color:#1f3864}
+.an .sbtn.on{background:#1f3864;border-color:#1f3864;color:#fff}
+/* Every row in the rail is the same two column grid, so the values line up down the
+whole column instead of each card finding its own right edge. */
+.an .kv{display:flex;justify-content:space-between;align-items:baseline;
+padding:8px 0;font-size:12.5px;border-bottom:1px solid #e9edf3}
+.an .kv:last-child{border-bottom:none}
+.an .kv .k{font-weight:500;padding-right:12px}
+.an .kv .v{flex:none;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;
+white-space:nowrap}
+.an .kv .per{display:block;font-size:9.5px;font-weight:600;color:#1f3864;
+letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
+.an .kv .band{display:block;font-size:9.5px;font-weight:600;color:#1f3864;margin-top:2px;
+text-transform:lowercase;letter-spacing:0}
+.an .holder{display:flex;justify-content:space-between;font-size:12px;
+padding:7px 0;border-bottom:1px solid #e9edf3}
+.an .holder:last-child{border-bottom:none}
+.an .holder .n{font-weight:500;padding-right:12px}
+.an .holder .p{flex:none;font-weight:700;font-variant-numeric:tabular-nums;text-align:right}
+.an .news a{display:block;font-size:12.5px;font-weight:600;color:#1a1a1a;
+text-decoration:none;padding:10px 0;border-bottom:1px solid #e9edf3;line-height:1.45}
+.an .news a:last-child{border-bottom:none}
+.an .news .m{font-size:10.5px;font-weight:600;color:#1f3864;margin-top:3px}
+.an .body-text{font-size:12.5px;font-weight:500;line-height:1.6;margin-top:10px}
+.an .view{background:#fff;border:1px solid #d8dee9;border-top:3px solid #1f3864;
+border-radius:8px;padding:22px 24px 24px;margin-top:14px}
+.an .view h2{margin:0;font-size:14px;font-weight:700}
+.an .view .lede{font-size:13px;font-weight:500;line-height:1.65;margin:12px 0 0}
+.an .view .lede b{font-weight:700}
+.an .vcols{display:flex;flex-wrap:wrap;margin:22px -8px 0}
+.an .vcols>.vcol{flex:1 1 0;min-width:210px;margin:0 8px 16px}
+@media(max-width:940px){.an .vcols>.vcol{flex-basis:47%;min-width:47%}}
+.an .vcol{border:1px solid #d8dee9;border-radius:6px;padding:15px 17px 17px;background:#f4f7fb}
+.an .vcol.s{border-left:3px solid #12703a}
+.an .vcol.c{border-left:3px solid #8a6300}
+.an .vcol.v{border-left:3px solid #1f3864}
+.an .vcol h3{margin:0 0 12px;font-size:10px;font-weight:700;letter-spacing:.08em;
+text-transform:uppercase;padding-bottom:9px;border-bottom:1px solid #d8dee9}
+.an .vcol ul{margin:0;padding-left:17px}
+.an .vcol li{font-size:12px;font-weight:500;line-height:1.6;margin-bottom:10px}
+.an .vcol li:last-child{margin-bottom:0}
+.an .disc{margin-top:20px;padding-top:15px;border-top:1px solid #d8dee9;font-size:10.5px;
+font-weight:500;line-height:1.6}
+.an .disc b{font-weight:700}
+.an .foot{margin-top:16px;padding:15px 18px;background:#fff;border:1px solid #d8dee9;
+border-radius:8px;font-size:11px;font-weight:500;line-height:1.75}
+.an .foot b{font-weight:700}
+.an .printhead{display:none}
+@media print{.an .printhead{display:flex !important;justify-content:space-between;
+align-items:baseline;font-size:9.5px;font-weight:700;letter-spacing:.07em;
+text-transform:uppercase;color:#1f3864;border-bottom:1px solid #1f3864;
+padding-bottom:7px;margin-bottom:12px}}
 
- /* Print to PDF. Cards must not be split across a page break, the grid collapses to one
-    column so nothing is cut off at the right margin, and colour is forced on because
-    browsers drop backgrounds by default. */
- @media print{
-   @page{size:A4 portrait;margin:12mm 10mm}
-   body,.stApp,.an{background:#fff !important}
-   .an{max-width:none;font-size:10.5px}
-   .an .grid{grid-template-columns:1fr !important;gap:8px}
-   .an .strip{grid-template-columns:repeat(3,1fr)}
-   .an .card,.an .view,.an .foot,.an .mast,.an .strip{break-inside:avoid;
-       page-break-inside:avoid;box-shadow:none}
-   .an .card,.an .view,.an .foot,.an .mast{border:1px solid #bbb}
-   .an .mast h1{font-size:22px}
-   .an .quote .px{font-size:24px}
-   .an .tabs{display:none}
-   .an *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-   .stApp header,section[data-testid="stSidebar"],div[data-testid="stExpander"],
-   .stDownloadButton,.stButton{display:none !important}
- }
+/* Print to PDF. Cards must not be split across a page break, the grid collapses to one
+column so nothing is cut off at the right margin, and colour is forced on because
+browsers drop backgrounds by default. */
+@media print{
+@page{size:A4 portrait;margin:12mm 10mm}
+body,.stApp,.an{background:#fff !important}
+.an{max-width:none;font-size:10.5px}
+.an .grid{grid-template-columns:1fr !important;gap:8px}
+.an .strip{grid-template-columns:repeat(3,1fr)}
+.an .card,.an .view,.an .foot,.an .mast,.an .strip{break-inside:avoid;
+page-break-inside:avoid;box-shadow:none}
+.an .card,.an .view,.an .foot,.an .mast{border:1px solid #bbb}
+.an .mast h1{font-size:22px}
+.an .quote .px{font-size:24px}
+.an .tabs{display:none}
+.an *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.stApp header,section[data-testid="stSidebar"],div[data-testid="stExpander"],
+.stDownloadButton,.stButton{display:none !important}
+}
 </style>
 """
+
+
+def _assert_css_is_markdown_safe():
+    """Markdown turns a line indented four spaces into a code block.
+
+    Streamlit runs markdown over the string before it renders any HTML, so an indented CSS
+    continuation line silently drops the rule it belongs to. The page then looks correct in a
+    saved preview file, which never goes through markdown, and wrong inside the app. This
+    catches that at import rather than on screen.
+    """
+    bad = [n for n, line in enumerate(CSS.split('\n'), 1)
+           if line.startswith('    ') and line.strip()]
+    if bad:
+        raise AssertionError(
+            f'CSS lines {bad[:6]} are indented four spaces or more. Markdown will turn them '
+            f'into a code block and the rules will not reach the page.')
+
+
+_assert_css_is_markdown_safe()
 
 
 # ------------------------------------------------------------------ formatting ----------
@@ -281,6 +380,36 @@ def sentence(clauses):
     if len(parts) == 1:
         return parts[0] + '.'
     return ', '.join(parts[:-1]) + ', and ' + parts[-1] + '.'
+
+
+def section(title, note_text=''):
+    """A standalone heading, used by the landing page between Streamlit widgets."""
+    return (f'<div class="an"><div class="sec"><span class="t">{title}</span>'
+            f'<span class="r"></span><span class="n">{note_text}</span></div></div>')
+
+
+def lede(text):
+    """The paragraph under the landing masthead.
+
+    Handed to Streamlit as plain markdown it came out in Streamlit's own font and sat
+    outside the card system, which was the one place on the page where two typefaces were
+    visible at once.
+    """
+    return f'<div class="an"><div class="body-text">{text}</div></div>'
+
+
+def counts(items):
+    """The four headline counts as one row.
+
+    Takes (label, value, note) triples and returns a single block, because four separate
+    Streamlit column writes are what put the boxes down one side.
+    """
+    cards = ''.join(
+        f'<div class="card"><div class="eyebrow">{esc(label)}</div>'
+        f'<div class="big">{esc(value)}</div>'
+        f'<div class="smallnote">{esc(meta)}</div></div>'
+        for label, value, meta in items)
+    return f'<div class="an"><div class="counts">{cards}</div></div>'
 
 
 def note(text):
@@ -510,73 +639,6 @@ PERCENT_METRICS = {'roic', 'roce', 'roa', 'roe', 'gross_margin', 'op_margin',
                    'net_margin', 'fcf_margin'}
 
 
-def card_weight(html):
-    """A rough height for one card, in arbitrary units, good enough to balance columns.
-
-    Counting rows beats measuring characters because a table row and a paragraph of the same
-    length occupy very different heights. Charts are counted separately because they dwarf
-    everything else.
-    """
-    w = 60                                    # padding, heading, source chip
-    w += html.count('<div class="kv"') * 30
-    w += html.count('<div class="holder"') * 26
-    w += html.count('<tr') * 30
-    w += html.count('<div class="brow"') * 28
-    w += html.count('<div class="read"') * 70
-    w += html.count('<div class="cnote"') * 52
-    w += html.count('<a ') * 46              # news items wrap to two lines
-    w += html.count('<svg class="chart"') * 250
-    w += html.count('class="sub"') * 34
-    body = re.sub(r'<[^>]+>', '', html)
-    w += len(body) // 90 * 18                 # prose that is not in a row
-    return w
-
-
-# The rail is 348px against a wide column of roughly 800px, so identical content runs taller
-# there. This is the multiplier for that, measured against the rendered page rather than
-# guessed: a two column list card takes about a fifth more height in the rail.
-RAIL_STRETCH = 1.2
-# Two cards sit side by side in the spill grid, so each one adds only about half its height
-# to the wide column.
-SPILL_SHARE = 0.55
-
-
-def balance(left_cards, rail_cards):
-    """Split the rail so both columns finish at a similar point, for any company.
-
-    Content length varies with what each source returned, so a fixed split can never end
-    level. This measures both columns, then moves cards off the foot of the rail into a two
-    across grid under the wide column until the two sides are within a tenth of each other.
-
-    Only rail cards move. The wide column holds the charts and the multi column tables, and
-    those cannot be read at 348px, so they never travel.
-    """
-    left_h = sum(card_weight(c) for c in left_cards)
-    rail = list(rail_cards)
-    spill = []
-    rail_h = sum(card_weight(c) for c in rail)
-
-    def sides():
-        return rail_h * RAIL_STRETCH, left_h + sum(card_weight(c) for c in spill) * SPILL_SHARE
-
-    # move from the foot of the rail while it is the taller side by more than a tenth
-    while len(rail) > 2:
-        r, l = sides()
-        if r <= l * 1.1:
-            break
-        candidate = rail[-1]
-        # stop if moving this card would leave the wide column the taller side instead
-        after_r = (rail_h - card_weight(candidate)) * RAIL_STRETCH
-        after_l = left_h + (sum(card_weight(c) for c in spill)
-                            + card_weight(candidate)) * SPILL_SHARE
-        if abs(after_r - after_l) > abs(r - l):
-            break
-        rail.pop()
-        rail_h -= card_weight(candidate)
-        spill.insert(0, candidate)
-    return rail, spill
-
-
 # ------------------------------------------------------------------ peer bars -----------
 PEER_ROWS = [('pe', 'P/E', 'x', False), ('roe', 'Return on equity', 'pct', True),
              ('op_margin', 'Operating margin', 'pct', True),
@@ -691,7 +753,9 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         f'<div class="mast"><div><div class="eyebrow">Equity analysis, {esc(tv_date)}</div>'
         f'<h1>{esc(tv.get("name") or tv.get("ticker") or "")}</h1>'
         f'<div class="meta">{meta}</div></div>'
-        f'<div class="quote"><div class="eyebrow">Last price</div>'
+        f'<div class="quote"><div class="eyebrow"><a class="back" href="?">'
+        f'Back to search</a></div>'
+        f'<div class="eyebrow" style="margin-top:6px">Last price</div>'
         f'<div class="px num">{f(price)}<span>{esc(ccy)}</span></div>'
         f'<div class="chg {cls} num">{arrow} {minus(f(ytd, "pct"))} year to date</div>'
         f'{rng}</div></div>')
@@ -967,7 +1031,11 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<table><thead><tr><th>CAGR</th><th>Absolute</th><th>Per share</th><th>Gap</th>'
             f'</tr></thead><tbody>{body}</tbody></table>{tail}</div>')
 
-    left('</div><div>')     # ---------- right rail ----------
+    # ---------- right rail ----------
+    # The two columns are emitted together at the end, so nothing here writes raw div tags.
+    # A leftover marker from before that change was landing in the left column as an empty
+    # div, which gave the grid a third child. Three children in a two column grid pushes the
+    # third onto its own row, which is why the rail was appearing underneath.
 
     # ---- the ratios that appear nowhere else. P/E, ROE, both margins, interest cover and
     #      debt to equity are in the sector bars, and Altman and Piotroski are in the strip
@@ -1130,23 +1198,50 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
                  f'<div class="sub">{n_an or 0} analysts covering</div>{kv}{tail}</div>')
 
     if tv.get('marquee'):
-        rail(
-            f'<div class="card"><span class="src">Dataroma, {esc(tv.get("_marquee_as_of",""))}'
-            f'</span><h2>Superinvestor ownership</h2>'
-            f'<div class="kv"><span class="k">Investors holding</span>'
-            f'<span class="v num">{f(tv.get("marquee_investors"), "int")}</span></div>'
-            f'<div class="kv"><span class="k">Aggregate weight</span>'
-            f'<span class="v num">{f(tv.get("marquee_weight_pct"), "pct")}</span></div>'
-            f'<div class="kv"><span class="k">Cleared the screen</span>'
-            f'<span class="v">{"Yes" if tv.get("screened") else "No"}</span></div>'
-            + note(
-                'A conviction position for the investors who hold it.'
-                if (tv.get('marquee_weight_pct') or 0) > 1 else
-                'A meaningful position for those who hold it.'
-                if (tv.get('marquee_weight_pct') or 0) > 0.4 else
-                'On the list, but a small position for everyone holding it. Presence alone '
-                'is weaker evidence than weight.')
-            + '</div>')
+        n_inv = tv.get('marquee_investors')
+        mx = tv.get('marquee_max_pct')
+        hold = tv.get('marquee_hold_price')
+        rows_m = ''
+        if n_inv:
+            rows_m += (f'<div class="kv"><span class="k">Investors holding</span>'
+                       f'<span class="v num">{f(n_inv, "int")}</span></div>')
+        if mx:
+            rows_m += (f'<div class="kv"><span class="k">Largest single position'
+                       f'<span class="per">of that investor\'s book</span></span>'
+                       f'<span class="v num">{f(mx, "pct")}</span></div>')
+        if hold and price:
+            gap = (price / hold - 1) * 100
+            cls = 'up' if gap > 0 else 'down'
+            rows_m += (f'<div class="kv"><span class="k">Average entry price</span>'
+                       f'<span class="v num">{f(hold)}</span></div>'
+                       f'<div class="kv"><span class="k">Holders are</span>'
+                       f'<span class="v num {cls}">{minus(f(gap, "pct"))}</span></div>')
+        rows_m += (f'<div class="kv"><span class="k">Cleared the screen</span>'
+                   f'<span class="v">{"Yes" if tv.get("screened") else "No"}</span></div>')
+
+        # Conviction is the largest single position, not the aggregate. The aggregate is a
+        # share of the entire tracked superportfolio, so it is small for everything and says
+        # nothing. One manager with a third of their book in a name is a real signal.
+        say = []
+        if mx is not None:
+            say.append(
+                'At least one manager has made this a cornerstone of their book'
+                if mx > 20 else
+                'At least one manager holds it at meaningful size' if mx > 7 else
+                'Nobody holds it at size, so it is a position rather than a conviction')
+        if n_inv:
+            say.append('and it is widely held across the managers tracked' if n_inv >= 15
+                       else 'and only a handful of managers hold it at all' if n_inv <= 3
+                       else 'and it is held by a moderate number of them')
+        if hold and price and price < hold:
+            say.append('with the average holder currently under water, so the thesis has not '
+                       'worked yet for them')
+        H_note = note(sentence(say)) if say else ''
+        rail(f'<div class="card"><span class="src">Dataroma, '
+             f'{esc(tv.get("_marquee_as_of",""))}</span>'
+             f'<h2>Superinvestor ownership</h2>'
+             f'<div class="sub">Discretionary managers who file 13F, as tracked by '
+             f'Dataroma</div>{rows_m}{H_note}</div>')
 
     pos_rows = []
     sp = info.get('shortPercentOfFloat')
@@ -1223,18 +1318,8 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         rail(f'<div class="card news"><span class="src y">Yahoo</span>'
                  f'<h2>Recent coverage</h2>{items}</div>')
 
-    rail_cards, spill = balance(LEFT, RAIL)
-    spill_html = ''
-    if spill:
-        spill_html = (f'<div class="spill">{"".join(spill)}</div>')
-    # sticky only when the rail is the shorter side, since a sticky column that is itself
-    # taller than the viewport would fight the scroll
-    left_total = sum(card_weight(c) for c in LEFT) + \
-        sum(card_weight(c) for c in spill) * SPILL_SHARE
-    rail_total = sum(card_weight(c) for c in rail_cards) * RAIL_STRETCH
-    rail_class = 'rail' if rail_total < left_total * 0.92 else ''
-    H.append('<div class="grid"><div>' + ''.join(LEFT) + spill_html
-             + f'</div><div class="{rail_class}">' + ''.join(rail_cards) + '</div></div>')    # close rail and grid
+    H.append('<div class="grid"><div>' + ''.join(LEFT)
+             + '</div><div>' + ''.join(RAIL) + '</div></div>')    # close rail and grid
 
     # ---------- the reading, last, after the evidence ----------
     supports, against, verify = assessment(tv, stats, forensics, risk, dupont_rows,

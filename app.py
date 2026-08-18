@@ -38,7 +38,8 @@ st.markdown("""
   div[data-testid="collapsedControl"] {display:none;}
   .block-container {padding-top:0.4rem; padding-bottom:1rem; max-width:1500px;}
   /* Streamlit leaves a gap for every element it renders. The page is one markdown block,
-     so those gaps only create empty bands. */
+  so those gaps only create empty bands. Note the indentation: four spaces would make
+  markdown treat the line as a code block and drop the rule. */
   div[data-testid="stVerticalBlock"] > div:empty {display:none;}
   div[data-testid="stMarkdownContainer"] > :first-child {margin-top:0;}
   .stApp > header {height:0;}
@@ -340,160 +341,6 @@ def price_risk(hist, bench=None):
 
 
 # ---------------------------------------------------------------- presentation ----------
-# ---------------------------------------------------------------- design system ---------
-# Built on the conventions institutional tearsheets settled on long ago, for reasons that
-# hold up: one typeface, three sizes, colour reserved for judgement rather than decoration,
-# numbers right-aligned on a tabular figure so columns line up, and hairline rules instead
-# of boxes so the eye follows content rather than borders.
-#
-# The palette is fixed rather than inherited from the Streamlit theme. The previous version
-# drew white cards on whatever background the theme supplied, which on dark mode produced
-# exactly the mismatch that made the page hard to read.
-
-INK      = '#111827'   # primary text
-INK_SOFT = '#4b5563'   # secondary text
-INK_MUTE = '#8b93a1'   # labels and meta
-LINE     = '#e5e7eb'   # hairlines
-SURFACE  = '#ffffff'
-CANVAS   = '#f7f8fa'
-NAVY     = '#16325c'
-GOLD     = '#a8791a'
-GOOD     = '#15803d'
-WARN     = '#b45309'
-BAD      = '#b91c1c'
-
-CSS = f"""
-<style>
-  /* the whole page runs on one fixed palette, whatever theme Streamlit is set to */
-  .stApp {{ background:{CANVAS}; }}
-  .block-container {{ padding-top:1.2rem; padding-bottom:3rem; max-width:1360px; }}
-  .stApp, .stApp p, .stApp li, .stApp span, .stApp div, .stApp label {{ color:{INK}; }}
-  .stApp h1, .stApp h2, .stApp h3 {{ color:{INK}; letter-spacing:-0.01em; }}
-
-  /* numbers use tabular figures so digits align down a column */
-  .num {{ font-variant-numeric:tabular-nums; font-feature-settings:'tnum'; }}
-
-  /* masthead */
-  .dv-mast {{ background:{SURFACE}; border:1px solid {LINE}; border-radius:10px;
-              padding:20px 24px 18px; margin-bottom:14px; }}
-  .dv-mast .eyebrow {{ font-size:11px; font-weight:600; letter-spacing:.09em;
-                       text-transform:uppercase; color:{GOLD}; margin-bottom:6px; }}
-  .dv-mast h1 {{ margin:0; font-size:27px; font-weight:640; line-height:1.15; }}
-  .dv-mast .facts {{ margin-top:10px; font-size:12.5px; color:{INK_SOFT}; }}
-  .dv-mast .facts b {{ color:{INK}; font-weight:600; }}
-  .dv-mast .facts .dot {{ color:{INK_MUTE}; margin:0 8px; }}
-
-  /* the price block sits right of the name, right-aligned like a quote screen */
-  .dv-quote {{ text-align:right; }}
-  .dv-quote .px {{ font-size:30px; font-weight:640; line-height:1.1;
-                   font-variant-numeric:tabular-nums; }}
-  .dv-quote .ccy {{ font-size:12px; color:{INK_MUTE}; margin-left:4px; font-weight:500; }}
-  .dv-quote .chg {{ font-size:13px; font-weight:600; margin-top:2px;
-                    font-variant-numeric:tabular-nums; }}
-
-  /* section rule */
-  .dv-sec {{ display:flex; align-items:baseline; gap:12px; margin:30px 0 12px; }}
-  .dv-sec .t {{ font-size:12px; font-weight:700; letter-spacing:.09em;
-                text-transform:uppercase; color:{NAVY}; white-space:nowrap; }}
-  .dv-sec .r {{ flex:1; height:1px; background:{LINE}; }}
-  .dv-sec .n {{ font-size:11px; color:{INK_MUTE}; white-space:nowrap; }}
-
-  /* metric tile: fixed height so a row of them aligns on every line */
-  .dv-tile {{ background:{SURFACE}; border:1px solid {LINE}; border-radius:8px;
-              padding:13px 15px 12px; height:118px; display:flex;
-              flex-direction:column; justify-content:space-between; }}
-  .dv-tile .k {{ font-size:10.5px; font-weight:600; letter-spacing:.06em;
-                 text-transform:uppercase; color:{INK_MUTE}; line-height:1.3; }}
-  .dv-tile .v {{ font-size:24px; font-weight:640; line-height:1.05; margin:6px 0 0;
-                 font-variant-numeric:tabular-nums; }}
-  .dv-tile .m {{ font-size:10.5px; color:{INK_MUTE}; line-height:1.4; }}
-  .dv-tile.good {{ box-shadow:inset 3px 0 0 {GOOD}; }}
-  .dv-tile.warn {{ box-shadow:inset 3px 0 0 {WARN}; }}
-  .dv-tile.bad  {{ box-shadow:inset 3px 0 0 {BAD}; }}
-  .dv-tile.flat {{ box-shadow:inset 3px 0 0 {LINE}; }}
-  .dv-tile.off  {{ background:#fbfbfc; border-style:dashed; }}
-  .dv-tile.off .v {{ color:{INK_MUTE}; font-weight:500; }}
-
-  .pos {{ color:{GOOD}; }} .neg {{ color:{BAD}; }} .neu {{ color:{INK_SOFT}; }}
-
-  /* provenance chips, small and quiet */
-  .chip {{ display:inline-block; font-size:9.5px; font-weight:600; letter-spacing:.04em;
-           text-transform:uppercase; padding:2px 7px; border-radius:4px;
-           background:#eef2f7; color:{NAVY}; }}
-  .chip.yh {{ background:#f6f1e6; color:{GOLD}; }}
-
-  /* a read-out line under a block: the sentence that says what the numbers mean */
-  .dv-read {{ background:{SURFACE}; border:1px solid {LINE}; border-left:3px solid {NAVY};
-              border-radius:6px; padding:11px 14px; font-size:12.5px; color:{INK_SOFT};
-              line-height:1.6; margin-top:10px; }}
-  .dv-read b {{ color:{INK}; }}
-  .dv-note {{ font-size:11.5px; color:{INK_MUTE}; line-height:1.6; margin-top:8px; }}
-
-  /* tables */
-  .stDataFrame {{ border:1px solid {LINE}; border-radius:8px; }}
-  div[data-testid="stExpander"] {{ border:1px solid {LINE}; border-radius:8px;
-                                   background:{SURFACE}; }}
-  div[data-testid="stExpander"] summary {{ font-size:12.5px; font-weight:600; }}
-</style>
-"""
-
-
-def fmt(value, kind='num', dp=2):
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return '–'
-    if kind == 'pct':
-        return f'{value:,.1f}%'
-    if kind == 'x':
-        return f'{value:,.2f}x'
-    if kind == 'money':
-        for cut, suffix in ((1e12, 'T'), (1e9, 'B'), (1e6, 'M'), (1e3, 'K')):
-            if abs(value) >= cut:
-                return f'{value/cut:,.2f}{suffix}'
-        return f'{value:,.0f}'
-    if kind == 'int':
-        return f'{value:,.0f}'
-    if kind == 'score9':
-        return f'{value:,.0f}<span style="font-size:14px;color:{INK_MUTE}"> / 9</span>'
-    return f'{value:,.{dp}f}'
-
-
-def chip(source, period=None):
-    cls = 'chip yh' if source.lower().startswith('yahoo') else 'chip'
-    return f'<span class="{cls}">{source}{" · " + period if period else ""}</span>'
-
-
-# kept under the old names so the rest of the page needs no rewriting
-def badge(source, period=None):
-    return chip(source, period)
-
-
-def tile(label, value, meta='', tone='flat'):
-    """One metric. Fixed height, so a row of these lines up on every line of text."""
-    return (f'<div class="dv-tile {tone}"><div class="k">{label}</div>'
-            f'<div class="v">{value}</div><div class="m">{meta}</div></div>')
-
-
-def card(label, value, meta='', thin=False):
-    return tile(label, value, meta, 'off' if thin else 'flat')
-
-
-def section(title, note=''):
-    return (f'<div class="dv-sec"><span class="t">{title}</span>'
-            f'<span class="r"></span><span class="n">{note}</span></div>')
-
-
-def read(text):
-    """The sentence that says what a block of numbers means."""
-    return f'<div class="dv-read">{text}</div>'
-
-
-def tone_from_band(band):
-    """Peer position to a tone, so colour always carries the same meaning."""
-    return {'best quartile': 'good', 'above median': 'good', 'better than median': 'good',
-            'below median': 'warn', 'below average': 'warn',
-            'worst quartile': 'bad'}.get(band, 'flat')
-
-
 # ---------------------------------------------------------------- the page --------------
 SPANS = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504, '5Y': 1260, '10Y': 2520, 'Max': None}
 
@@ -617,10 +464,15 @@ def _search_feed(feed, query, limit=25):
 def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
     """The page someone sees when they open the app without a company in the URL.
 
-    Deliberately built from the published feed alone, with no Yahoo call anywhere, so it
-    opens immediately. Yahoo is only worth waking up once a company has been chosen.
+    Same shape it always had: a header, four counts, a search box, three starting lists and
+    the sector table. Only the palette and the typeface have changed, so that it matches the
+    company page instead of carrying a second design of its own.
+
+    Built from the published feed alone, with no Yahoo call anywhere, so it opens straight
+    away. Yahoo is only worth waking up once a company has been chosen.
     """
-    st.markdown(CSS, unsafe_allow_html=True)
+    import page as pg
+    st.markdown(pg.CSS, unsafe_allow_html=True)
     stocks = feed.get('stocks') or {}
     total = len(stocks)
     marquee = sum(1 for e in stocks.values() if e.get('marquee'))
@@ -628,52 +480,48 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
     both = sum(1 for e in stocks.values() if e.get('marquee') and e.get('screened'))
 
     st.markdown(
-        f'<div class="dv-head"><h1>Equity Analysis</h1><div class="sub">'
-        f'<span class="dv-pill">TradingView · {feed.get("as_of", "")}</span>'
-        f'<span class="dv-pill">Dataroma · {feed.get("marquee_as_of", "")}</span>'
-        f'<span class="dv-pill">{total:,} companies</span>'
-        f'</div></div>', unsafe_allow_html=True)
+        f'<div class="an"><div class="mast"><div>'
+        f'<div class="eyebrow">MICS International, internal research</div>'
+        f'<h1>Equity analysis</h1>'
+        f'<div class="meta"><b>TradingView</b> {pg.esc(feed.get("as_of", ""))}'
+        f'<span class="sep">/</span><b>Dataroma</b> '
+        f'{pg.esc(feed.get("marquee_as_of", ""))}'
+        f'<span class="sep">/</span>{total:,} companies in this feed</div>'
+        f'</div></div></div>', unsafe_allow_html=True)
 
-    st.markdown(
-        'Screening happens on the TradingView universe and produces the shortlist. This '
-        'app is the second step: pick one company and it assembles the analysis Yahoo can '
-        'add over and above what the screener already knows - how the return on equity is '
-        'earned, whether reported profit arrives as cash, where the cash went, what a '
-        'holder actually received per share, and the forensic scores TradingView does not '
-        'publish.')
+    st.markdown(pg.lede(
+        'Screening runs on the TradingView universe and produces the shortlist. This is the '
+        'second step: pick one company and the page assembles what Yahoo can add over and '
+        'above the screen. How the return on equity is earned, whether reported profit '
+        'arrives as cash, where that cash went, what a holder actually received per share, '
+        'and the forensic scores TradingView does not publish.'), unsafe_allow_html=True)
 
-    c = st.columns(4, gap='small')
-    c[0].markdown(card('In this feed', f'{total:,}',
-                       'screened names plus every marquee holding'), unsafe_allow_html=True)
-    c[1].markdown(card('Cleared a screen', f'{screened:,}',
-                       'passed their own sector thresholds'), unsafe_allow_html=True)
-    c[2].markdown(card('Superinvestor held', f'{marquee:,}', 'tracked by Dataroma'),
-                  unsafe_allow_html=True)
-    c[3].markdown(card('Both', f'{both:,}',
-                       'held by superinvestors and through the screen'),
-                  unsafe_allow_html=True)
+    # One markdown call, not four columns. Four calls meant four separate blocks and the
+    # browser stacked them down the left of the page.
+    st.markdown(pg.counts([
+        ('In this feed', f'{total:,}', 'screened names and marquee holdings'),
+        ('Cleared a screen', f'{screened:,}', 'passed their own sector thresholds'),
+        ('Superinvestor held', f'{marquee:,}', 'tracked by Dataroma'),
+        ('Both', f'{both:,}', 'through the screen and held')]),
+        unsafe_allow_html=True)
 
-    # ---------------- search ----------------
-    st.markdown(section('Find a company'), unsafe_allow_html=True)
+    st.markdown(pg.section('Find a company'), unsafe_allow_html=True)
     query = st.text_input('Ticker, company name or ISIN',
                           placeholder='NVDA, Nestle, US67066G1040',
                           label_visibility='collapsed')
     if query:
         hits = _search_feed(feed, query)
         if not hits:
-            st.info(f'Nothing matching "{query}" in this feed. It carries screened names '
-                    f'and marquee holdings, not the whole 30,000 stock universe, so a name '
-                    f'that failed every screen will not appear here.')
+            st.info(f'Nothing matching "{query}". This feed carries screened names and '
+                    f'marquee holdings, not the whole 30,000 stock universe, so a company '
+                    f'that failed every screen will not be here.')
         for isin, e in hits[:12]:
-            row = st.columns([3, 2, 2, 2, 1.6])
-            flag = ' ★' if e.get('marquee') else ''
+            row = st.columns([3, 2, 2, 2, 1.5])
+            flag = ' held' if e.get('marquee') else ''
             row[0].markdown(f"**{e.get('ticker')}**{flag}  \n{e.get('name')}")
-            row[1].markdown(f"{e.get('gics') or '-'}  \n<span class='dv-note'>"
-                            f"{e.get('country') or ''}</span>", unsafe_allow_html=True)
-            row[2].markdown(f"{fmt(e.get('mcap'), 'money')}  \n<span class='dv-note'>"
-                            f"market cap</span>", unsafe_allow_html=True)
-            row[3].markdown(f"P/E {fmt(e.get('pe'), 'x')}  \n<span class='dv-note'>"
-                            f"ROE {fmt(e.get('roe'), 'pct')}</span>", unsafe_allow_html=True)
+            row[1].markdown(f"{e.get('gics') or ''}  \n{e.get('country') or ''}")
+            row[2].markdown(f"{pg.f(e.get('mcap'), 'money')}  \nmarket cap")
+            row[3].markdown(f"P/E {pg.f(e.get('pe'), 'x')}  \nROE {pg.f(e.get('roe'), 'pct')}")
             if row[4].button('Analyse', key=f'go_{isin}'):
                 st.query_params['ticker'] = e.get('ticker') or ''
                 st.query_params['isin'] = isin
@@ -681,77 +529,69 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
                     st.query_params['ccy'] = e['ccy']
                 st.rerun()
 
-    # ---------------- where to start ----------------
-    st.markdown(section('Somewhere to start'), unsafe_allow_html=True)
-    tab_names = ['Most widely held', 'Cheapest that cleared a screen', 'Highest quality']
-    tabs = st.tabs(tab_names)
+    st.markdown(pg.section('Somewhere to start',
+                           'paste any ISIN below into the box above'),
+                unsafe_allow_html=True)
 
-    def show(rows, extra_label, extra_key, extra_kind):
+    def table(rows, extra_label, extra_key, extra_kind):
         if not rows:
             st.caption('Nothing to show from this feed.')
             return
-        table = []
+        out = []
         for isin, e in rows:
-            row = {'Ticker': e.get('ticker'), 'Company': e.get('name'),
-                   'Sector': e.get('gics'), 'Country': e.get('country'),
-                   extra_label: fmt(e.get(extra_key), extra_kind)}
-            # the ranking column is already shown, so do not repeat it below
+            r = {'Ticker': e.get('ticker'), 'Company': e.get('name'),
+                 'Sector': e.get('gics'), 'Country': e.get('country'),
+                 extra_label: pg.f(e.get(extra_key), extra_kind)}
             if extra_key != 'pe':
-                row['P/E'] = fmt(e.get('pe'), 'x')
+                r['P/E'] = pg.f(e.get('pe'), 'x')
             if extra_key != 'roe':
-                row['ROE'] = fmt(e.get('roe'), 'pct')
-            row['Market cap'] = fmt(e.get('mcap'), 'money')
-            row['ISIN'] = isin
-            table.append(row)
-        st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
-        st.caption('Paste an ISIN into the search box above to open its analysis.')
+                r['ROE'] = pg.f(e.get('roe'), 'pct')
+            r['Market cap'] = pg.f(e.get('mcap'), 'money')
+            r['ISIN'] = isin
+            out.append(r)
+        st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True)
 
-    held = sorted([(k, v) for k, v in stocks.items() if v.get('marquee_investors')],
-                  key=lambda r: -(r[1].get('marquee_investors') or 0))[:15]
+    tabs = st.tabs(['Most widely held', 'Highest conviction', 'Cheapest that cleared',
+                    'Highest quality'])
     with tabs[0]:
-        show(held, 'Investors holding', 'marquee_investors', 'int')
-
-    # A P/E below about 2 is almost always a depositary receipt quoted per fractional
-    # share, or a stale price, rather than a bargain. Anything under $300m is too thin to
-    # act on. Both are excluded so this list is something you could actually use.
-    cheap = sorted([(k, v) for k, v in stocks.items()
-                    if v.get('screened') and (v.get('pe') or 0) >= 2
-                    and (v.get('mcap') or 0) >= 3e8
-                    and (v.get('roe') or 0) > 0],
-                   key=lambda r: (r[1].get('pe') or 1e9))[:15]
+        table(sorted([(k, v) for k, v in stocks.items() if v.get('marquee_investors')],
+                     key=lambda r: -(r[1].get('marquee_investors') or 0))[:15],
+              'Investors holding', 'marquee_investors', 'int')
     with tabs[1]:
-        show(cheap, 'P/E', 'pe', 'x')
-
-    quality = sorted([(k, v) for k, v in stocks.items()
-                      if v.get('screened') and v.get('roe') is not None
-                      and (v.get('piotroski_f') or 0) >= 8
-                      and (v.get('mcap') or 0) >= 3e8],
-                     key=lambda r: -(r[1].get('roe') or 0))[:15]
+        # the largest single position is the conviction measure, not the aggregate weight
+        table(sorted([(k, v) for k, v in stocks.items() if v.get('marquee_max_pct')],
+                     key=lambda r: -(r[1].get('marquee_max_pct') or 0))[:15],
+              'Largest single position', 'marquee_max_pct', 'pct')
     with tabs[2]:
-        show(quality, 'Piotroski F', 'piotroski_f', 'int')
+        table(sorted([(k, v) for k, v in stocks.items()
+                      if v.get('screened') and (v.get('pe') or 0) >= 2
+                      and (v.get('mcap') or 0) >= 3e8 and (v.get('roe') or 0) > 0],
+                     key=lambda r: (r[1].get('pe') or 1e9))[:15], 'P/E', 'pe', 'x')
+    with tabs[3]:
+        table(sorted([(k, v) for k, v in stocks.items()
+                      if v.get('screened') and v.get('roe') is not None
+                      and (v.get('piotroski_f') or 0) >= 8 and (v.get('mcap') or 0) >= 3e8],
+                     key=lambda r: -(r[1].get('roe') or 0))[:15],
+              'Piotroski F', 'piotroski_f', 'int')
 
-    # ---------------- sector shape ----------------
     if sector_stats:
-        st.markdown(section('What each sector looks like'), unsafe_allow_html=True)
-        rows = []
-        for gics, block in sorted(sector_stats.items()):
-            rows.append({
-                'Sector': gics, 'Companies': f"{block.get('count', 0):,}",
-                'Median P/E': fmt((block.get('pe') or {}).get('median'), 'x'),
-                'Median ROE': fmt((block.get('roe') or {}).get('median'), 'pct'),
-                'Median op margin': fmt((block.get('op_margin') or {}).get('median'), 'pct'),
-                'Median Altman Z': fmt((block.get('altman_z') or {}).get('median')),
-                'Median Piotroski': fmt((block.get('piotroski_f') or {}).get('median'), 'int'),
-            })
+        st.markdown(pg.section('What each sector looks like'), unsafe_allow_html=True)
+        rows = [{'Sector': g, 'Companies': f"{b.get('count', 0):,}",
+                 'Median P/E': pg.f((b.get('pe') or {}).get('median'), 'x'),
+                 'Median ROE': pg.f((b.get('roe') or {}).get('median'), 'pct'),
+                 'Median op margin': pg.f((b.get('op_margin') or {}).get('median'), 'pct'),
+                 'Median Altman Z': pg.f((b.get('altman_z') or {}).get('median')),
+                 'Median Piotroski': pg.f((b.get('piotroski_f') or {}).get('median'), 'int')}
+                for g, b in sorted(sector_stats.items())]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        st.markdown('<div class="dv-note">These medians come from the full TradingView '
-                    'universe, not from the screened subset. A median taken from names '
-                    'that already passed a quality screen is a median of the winners, and '
-                    'would make every company on this app look average.</div>',
+        st.markdown('<div class="an"><div class="smallnote">These medians come from the full '
+                    'TradingView universe, not the screened subset. A median taken from '
+                    'names that already passed a quality screen is a median of the winners, '
+                    'and would make every company on this app look average.</div></div>',
                     unsafe_allow_html=True)
 
     st.divider()
-    st.caption(f'Full screener with all filters: {screener_url}/')
+    st.caption(f'Full screener with every filter: {screener_url}/')
 
 
 # ---------------------------------------------------------------- routing ---------------
@@ -873,6 +713,14 @@ def run_company(ticker, isin, ccy):
             st.rerun()
         st.stop()
         return
+
+    # keep a short history for the landing page. Session only, nothing stored anywhere.
+    if tv_entry and tv_entry.get('ticker'):
+        recent = [r for r in st.session_state.get('recent', [])
+                  if r.get('ticker') != tv_entry['ticker']]
+        recent.insert(0, {'ticker': tv_entry['ticker'], 'isin': tv_isin or isin or '',
+                          'ccy': tv_entry.get('ccy') or ''})
+        st.session_state['recent'] = recent[:8]
 
     render(st, tv_entry or {}, tv_isin or isin, yf_data, stats, forensics, resolution)
     st.divider()
