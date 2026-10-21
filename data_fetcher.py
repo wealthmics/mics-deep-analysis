@@ -452,3 +452,42 @@ def resolve_listing(ticker: str, name: str = None, expect_currency: str = None,
     cache[cache_key] = out
     _save_isin_cache(cache)
     return out
+
+
+# ----------------------------------------------------------------- price history only --
+def get_price_history(symbol: str, max_age_hours: float = 12) -> "pd.DataFrame | None":
+    """Daily history and nothing else, for a benchmark such as the S&P 500 (^GSPC).
+
+    get_ticker_data pulls statements, holders and news as well, which an index does not
+    have and which would only waste Yahoo's patience. Cached to disk for half a day.
+    """
+    safe = re.sub(r"[^A-Za-z0-9]", "_", symbol)
+    path = os.path.join(CACHE_DIR, f"hist_{safe}.pkl")
+    try:
+        if os.path.exists(path) and (time.time() - os.path.getmtime(path)) < max_age_hours * 3600:
+            with open(path, "rb") as fh:
+                return pickle.load(fh)
+    except Exception:
+        pass
+    hist = None
+    for period in ("max", "10y", "5y"):
+        try:
+            hist = yf.Ticker(symbol).history(period=period, auto_adjust=True)
+            if hist is not None and len(hist) > 60:
+                break
+        except Exception:
+            hist = None
+    if hist is not None and len(hist) > 60:
+        try:
+            with open(path, "wb") as fh:
+                pickle.dump(hist, fh)
+        except Exception:
+            pass
+        return hist
+    if os.path.exists(path):               # stale beats nothing
+        try:
+            with open(path, "rb") as fh:
+                return pickle.load(fh)
+        except Exception:
+            return None
+    return None
