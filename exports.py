@@ -143,6 +143,12 @@ def window_rows(ctx):
     return rows
 
 
+def verdict(ctx):
+    import scoring
+    return scoring.score(ctx['tv'], ctx.get('stats') or {}, ctx['info'], ctx['risk'],
+                         ctx.get('qoe_rows'), ctx.get('forensics'), ctx.get('dupont'))
+
+
 def reading(ctx):
     tv = ctx['tv']
     s, c, v = pg.assessment(tv, ctx.get('stats') or {}, ctx.get('forensics'), ctx['risk'],
@@ -292,7 +298,7 @@ def build_xlsx(ctx):
         return r + 1
 
     # ---- Overview
-    ws = sheet('Overview', first=True, widths=(30, 22, 18, 52))
+    ws = sheet('Overview', first=True, widths=(30, 22, 18, 52, 52))
     r = title(ws, name, f'{meta_line(ctx)}   |   TradingView data as at {as_of}')
     ws.cell(r, 1, headline(ctx)).font = font(size=12, bold=True, color=GOLD)
     r += 2
@@ -303,22 +309,32 @@ def build_xlsx(ctx):
         r = heading(ws, r, 'Quality and forensic scores')
         r = table(ws, r, ['Score', 'Value', 'Reading', 'What it measures'], sc,
                   aligns=['left', 'right', 'left', 'left'], wrap_cols=(3,))
-    s, c, v = reading(ctx)
-    r = heading(ws, r, 'Where the numbers point')
+    sc = verdict(ctx)
+    _, _, v = reading(ctx)
+    r = heading(ws, r, 'Verdict' if ctx.get('show_opinion') else 'How it scores against its sector')
     if ctx.get('lede'):
         ws.cell(r, 1, ctx['lede']).font = font(italic=True)
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
         ws.cell(r, 1).alignment = Alignment(wrap_text=True, vertical='top')
         ws.row_dimensions[r].height = 15 * max(2, len(ctx['lede']) // 110 + 1)
         r += 2
-    rows = [('Supported by the data', x) for x in s] + \
-           [('Cuts against it', x) for x in c] + [('Verify before acting', x) for x in v]
+    head_rows = [('Overall score', f'{sc["overall"]} of 100' if sc['overall'] is not None else 'n/a')]
+    if ctx.get('show_opinion'):
+        head_rows.insert(0, ('Opinion', sc['opinion'] + (' (capped by a red flag)' if sc['capped'] else '')))
+    r = table(ws, r, ['Measure', 'Value'], head_rows)
+    prow = [(name, (pl or {}).get('score'), f'{w}%', (pl or {}).get('best', 'No data'),
+             '' if not pl or pl['best'] == pl['worst'] or min(i_['score'] for i_ in pl['items']) >= 50
+             else pl['worst']) for name, w in sc['weights'].items()
+            for pl in [sc['pillars'].get(name)]]
+    r = table(ws, r, ['Pillar', 'Score', 'Weight', 'Strongest figure', 'Weakest figure'], prow,
+              aligns=['left', 'right', 'right', 'left', 'left'], wrap_cols=(3, 4))
+    rows = [('Lifting the score', t) for t in sc['lifts']] + [('Holding it back', t) for t in sc['drags']] + \
+           [('Red flag', t) for t in sc['flags']] + [('Check before acting', plain(t)) for t in v[:3]]
     for i, (k, t) in enumerate(rows):
         ws.cell(r, 1, k).font = font(bold=True, color=NAVY)
         ws.cell(r, 2, t).font = font()
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
         ws.cell(r, 2).alignment = Alignment(wrap_text=True, vertical='top')
-        ws.cell(r, 1).alignment = Alignment(vertical='top')
         ws.row_dimensions[r].height = 15 * max(1, len(t) // 95 + 1)
         for j in range(1, 5):
             ws.cell(r, j).border = Border(bottom=hair)
@@ -742,25 +758,31 @@ def build_pptx(ctx):
         rows = [['Measure', 'Value', 'Source']] + [list(x) for x in vr]
         table(s, X0, 1.5, [3.4, 2.2, 2.6], rows, size=11, rowh=0.36, aligns=['l', 'r', 'l'])
 
-    # 8. where the numbers point
-    sup, cut, ver = reading(ctx)
-    s = content('Where the numbers point',
-                'Generated from the figures in this pack' +
-                (', with the analyst\'s note' if ctx.get('lede') else ''))
-    y = 1.75
-    if ctx.get('lede'):
-        text(s, X0, y, CW, 0.9, ctx['lede'], size=12, color=INK, italic=True)
-        y += 1.0
-    n = max(len(sup), len(cut), len(ver), 1)
-    rows = [['Supported by the data', 'Cuts against it', 'Verify before acting']]
-    none = 'Nothing material from these figures.'
-    sup, cut, ver = sup or [none], cut or [none], ver or [none]
-    n = max(len(sup), len(cut), len(ver))
-    for i in range(n):
-        rows.append([sup[i] if i < len(sup) else '', cut[i] if i < len(cut) else '',
-                     ver[i] if i < len(ver) else ''])
-    table(s, X0, y, [CW / 3] * 3, rows, size=10.5, rowh=min(0.85, (6.75 - y) / (n + 1)),
-          aligns=['l', 'l', 'l'], first_bold=False)
+    # 8. verdict
+    sc = verdict(ctx)
+    _, _, ver = reading(ctx)
+    show = ctx.get('show_opinion')
+    total = '-' if sc['overall'] is None else str(sc['overall'])
+    ttl = (f'Verdict: {sc["opinion"]}, {total} of 100' if show and sc['overall'] is not None
+           else f'How {name} scores against its sector: {total} of 100')
+    s = content(ttl, 'Each figure scored against its own sector; five weighted pillars make the total'
+                + (', capped at Hold by a red flag' if show and sc['capped'] else ''))
+    rows = [['Pillar', 'Weight', 'Score', 'Strongest figure', 'Weakest figure, when below the median']]
+    for pname, w in sc['weights'].items():
+        pl = sc['pillars'].get(pname)
+        rows.append([pname, f'{w}%', '-' if not pl else str(pl['score']),
+                     'No data' if not pl else pl['best'],
+                     '' if not pl or pl['best'] == pl['worst'] or
+                     min(i_['score'] for i_ in pl['items']) >= 50 else pl['worst']])
+    table(s, X0, 1.75, [2.0, 0.85, 0.85, 4.2, 4.233], rows, size=10, rowh=0.52,
+          aligns=['l', 'r', 'r', 'l', 'l'])
+    y = 1.75 + 0.52 * len(rows) + 0.25
+    cols_ = [('Lifting the score', sc['lifts']), ('Holding it back', sc['drags'] + sc['flags']),
+             ('Check before acting', [plain(t) for t in ver[:3]])]
+    for k, (h_, xs) in enumerate(cols_):
+        text(s, X0 + k * (CW / 3), y, CW / 3 - 0.2,
+             6.85 - y, [(h_, {'bold': True, 'color': NAVY, 'size': 12})] +
+             [(t, {'space': 4, 'size': 10}) for t in (xs or ['Nothing stands out.'])], size=10)
 
     # 9. notes
     s = content('Notes and sources')
