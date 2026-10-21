@@ -27,6 +27,7 @@ import streamlit as st
 
 import data_fetcher as df_mod
 import risk as rk
+import indexes as ix_reg
 import financial_formulas as ff
 
 st.set_page_config(page_title='MICS Equity Analysis', layout='wide',
@@ -623,6 +624,11 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
                     st.query_params['ccy'] = e['ccy']
                 st.rerun()
 
+    st.markdown(pg.section('Analyse an index',
+                           f'{len(ix_reg.INDEXES)} markets, global to single country'),
+                unsafe_allow_html=True)
+    index_picker('land')
+
     st.markdown(pg.section('Somewhere to start',
                            'paste any ISIN below into the box above'),
                 unsafe_allow_html=True)
@@ -689,6 +695,137 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
 
 
 # ---------------------------------------------------------------- routing ---------------
+def index_picker(key='idx'):
+    """Region, then index, then open. Any Yahoo index or fund symbol can be typed instead."""
+    c1, c2, c3 = st.columns([1.1, 2.2, 0.8])
+    regions = ['All regions'] + ix_reg.REGIONS
+    region = c1.selectbox('Region', regions, key=f'{key}_region')
+    pool = [x for x in ix_reg.INDEXES if region == 'All regions' or x['region'] == region]
+    labels = {x['id']: (f'{x["name"]}  ({x["country"]})' if x['country'] not in
+                        (x['name'], 'World') else x['name']) for x in pool}
+    pick = c2.selectbox('Index', [x['id'] for x in pool], key=f'{key}_pick',
+                        format_func=lambda i: labels[i])
+    c3.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+    if c3.button('Analyse', key=f'{key}_go', use_container_width=True, type='primary'):
+        st.query_params.clear()
+        st.query_params['index'] = pick
+        st.rerun()
+    with st.expander('Or type any Yahoo symbol for an index or a fund'):
+        d1, d2 = st.columns([3, 1])
+        sym = d1.text_input('Symbol', placeholder='^GSPC, ^N225, EWZ, VWRA.L', key=f'{key}_sym',
+                            label_visibility='collapsed')
+        if d2.button('Analyse symbol', key=f'{key}_symgo', use_container_width=True) and sym.strip():
+            st.query_params.clear()
+            st.query_params['index'] = sym.strip()
+            st.rerun()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_history(symbol):
+    if not symbol:
+        return None
+    try:
+        return df_mod.get_price_history(symbol)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600 * 6, show_spinner=False)
+def load_fund(symbol):
+    if not symbol:
+        return {}
+    try:
+        return df_mod.get_fund_profile(symbol)
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def render_index_home():
+    import page as pg
+    st.markdown(pg.CSS, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="an"><div class="mast"><div>'
+        '<div class="eyebrow">MICS International, internal research</div>'
+        '<h1>Index analysis</h1>'
+        f'<div class="meta">{len(ix_reg.INDEXES)} indexes across '
+        f'{len(ix_reg.REGIONS)} regions, each with the fund that tracks it</div>'
+        '</div><div class="quote"><div class="eyebrow"><a class="back" href="?">'
+        'Company search</a></div></div></div></div>', unsafe_allow_html=True)
+    st.markdown(pg.lede(
+        'Pick a market to see its returns in local currency and to a US dollar investor, '
+        'its drawdowns, how closely it moves with the S&amp;P 500, and what the fund that '
+        'tracks it holds, costs and is priced at.'), unsafe_allow_html=True)
+    index_picker('home')
+    rows = [{'Region': x['region'], 'Index': x['name'], 'Country': x['country'],
+             'Index symbol': x['index'] or '', 'Tracking fund': x['etf'] or '',
+             'Other funds': ', '.join(x['alt'])} for x in ix_reg.INDEXES]
+    st.markdown(pg.section('Every index in the list'), unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True, height=520)
+
+
+def run_index(key):
+    import index_page as ipg
+    entry = ix_reg.find(key)
+    if entry is None:
+        st.error('No index was named.')
+        return
+    with st.spinner(f'Loading {entry["name"]}...'):
+        idx_hist = load_history(entry.get('index'))
+        etf_hist = load_history(entry.get('etf'))
+        fund = load_fund(entry.get('etf'))
+        bench = load_benchmark()
+        spy = load_fund('SPY') if entry.get('etf') != 'SPY' else fund
+    failed = [s for s, h in ((entry.get('index'), idx_hist), (entry.get('etf'), etf_hist))
+              if s and h is None]
+    if failed:
+        st.warning(f'Yahoo returned no price history for {", ".join(failed)}. '
+                   + ('The page uses what did arrive.' if (idx_hist is not None or
+                                                           etf_hist is not None) else ''))
+    ctx = ipg.compute(entry, idx_hist, etf_hist, fund, bench, spy)
+    if ctx.get('primary') is None:
+        sym = entry.get('index') or entry.get('etf')
+        st.error(f'Nothing to show for {entry["name"]}: Yahoo has no price history for {sym}. '
+                 + ('Check the symbol is written the way Yahoo writes it, for example ^N225 or '
+                    'EWZ.' if entry.get('custom') else
+                    'If Yahoo has renamed the symbol, update it in indexes.py.'))
+        if st.button('Back to indexes'):
+            st.query_params.clear()
+            st.query_params['view'] = 'indexes'
+            st.rerun()
+        return
+    html = ipg.build(ctx)
+    st.markdown(html, unsafe_allow_html=True)
+    stem = (f'MICS_{re.sub(r"[^A-Za-z0-9]+", "-", entry["name"]).strip("-")}_index_'
+            f'{datetime.date.today():%Y-%m-%d}')
+    c1, c2, c3 = st.columns(3)
+    try:
+        import index_exports as ixp
+        with c1:
+            st.download_button('Excel workbook', ixp.build_index_xlsx(ctx), file_name=stem + '.xlsx',
+                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                               use_container_width=True)
+        with c2:
+            st.download_button('PowerPoint', ixp.build_index_pptx(ctx), file_name=stem + '.pptx',
+                               mime='application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                               use_container_width=True)
+    except Exception as e:
+        with c1:
+            st.caption(f'Excel and PowerPoint exports are unavailable: {e}')
+    report = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+              f'<title>{entry["name"]} index analysis</title></head><body>' + html + '</body></html>')
+    with c3:
+        st.download_button('Printable page (HTML)', report, file_name=stem + '.html',
+                           mime='text/html', use_container_width=True)
+    st.divider()
+    st.markdown(pg_section_html('Analyse another index'), unsafe_allow_html=True)
+    index_picker('again')
+
+
+def pg_section_html(title):
+    import page as pg
+    return pg.section(title)
+
+
 def read_link():
     """Read ?ticker=, ?isin= and ?ccy= off the URL, whichever Streamlit API exists."""
     def grab(params, key):
@@ -706,6 +843,16 @@ def read_link():
         except Exception:
             return None, None, None
     return grab(params, 'ticker'), grab(params, 'isin'), grab(params, 'ccy')
+
+
+def read_param(key):
+    try:
+        raw = st.query_params.get(key)
+    except Exception:
+        return None
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    return str(raw).strip() if raw else None
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -846,6 +993,13 @@ def run_company(ticker, isin, ccy):
 
 
 def main():
+    index_key = read_param('index')
+    if index_key:
+        run_index(index_key)
+        return
+    if read_param('view') == 'indexes':
+        render_index_home()
+        return
     ticker, isin, ccy = read_link()
     if ticker or isin:
         run_company(ticker, isin, ccy)
