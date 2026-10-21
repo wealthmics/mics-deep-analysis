@@ -171,7 +171,7 @@ def drawdown_sentence(dd, where='in this window'):
     return text
 
 
-def beta_sentence(b, ccy=None):
+def beta_sentence(b, ccy=None, noun='the stock'):
     """What the beta means here, including when it should not be leaned on."""
     if not b or b.get('beta') is None:
         if b and b.get('obs') is not None:
@@ -181,20 +181,70 @@ def beta_sentence(b, ccy=None):
     beta, corr, freq, obs = b['beta'], b['corr'], b['freq'], b['obs']
     if corr is not None and abs(corr) < 0.3:
         text = (f'Beta against the {BENCH_NAME} is {beta:.2f}, but the correlation is only '
-                f'{corr:.2f}, so the index explains little of how this stock moves. Read the '
+                f'{corr:.2f}, so the S&P 500 explains little of how {noun} moves. Read the '
                 f'beta as weak.')
     elif beta < 0:
-        text = (f'Beta against the {BENCH_NAME} is {beta:.2f}: the stock has tended to move '
-                f'against the index over this window.')
+        text = (f'Beta against the {BENCH_NAME} is {beta:.2f}: {noun} has tended to move '
+                f'against the S&P 500 over this window.')
     else:
-        size = ('more than the index' if beta > 1.15 else
-                'less than the index' if beta < 0.85 else 'roughly in step with the index')
-        text = (f'Beta of {beta:.2f} against the {BENCH_NAME}: on {freq} returns the stock '
-                f'has typically moved about {beta:.1f}% for each 1% move in the index, '
+        size = ('so it has swung more than the market' if beta > 1.15 else
+                'so it has swung less than the market' if beta < 0.85 else
+                'roughly in step with the market')
+        text = (f'Beta of {beta:.2f} against the {BENCH_NAME}: on {freq} returns {noun} '
+                f'has typically moved about {beta:.1f}% for each 1% move in the S&P 500, '
                 f'{size}.')
     if obs < 26:
         text += f' Based on only {obs} {freq} returns, so treat it as a rough reading.'
     if ccy and str(ccy).upper() != 'USD':
-        text += (f' Measured in {ccy} against an index in US dollars, so currency moves are '
+        text += (f' Measured in {ccy} against the S&P 500 in US dollars, so currency moves are '
                  f'part of the figure.')
     return text
+
+
+def thin_series(series, buckets=300):
+    """At most two points per bucket, keeping each bucket's high and low in date order, so a
+    long series draws fast without losing its shape, extremes, first or last value."""
+    n = len(series)
+    if n <= buckets * 2:
+        return series
+    vals = series.to_numpy()
+    keep = {0, n - 1}
+    edges = np.linspace(0, n, buckets + 1).astype(int)
+    for a, b in zip(edges[:-1], edges[1:]):
+        if b <= a:
+            continue
+        chunk = vals[a:b]
+        keep.add(a + int(np.nanargmax(chunk)))
+        keep.add(a + int(np.nanargmin(chunk)))
+    return series.iloc[sorted(keep)]
+
+
+PERIODS = [('1M', 1), ('3M', 3), ('6M', 6), ('YTD', None), ('1Y', 12), ('3Y', 36),
+           ('5Y', 60), ('10Y', 120)]
+
+
+def trailing_returns(series):
+    """Return over each standard period, annualised from three years up. None where the
+    series does not reach back that far."""
+    s = dated(series)
+    out = {}
+    if s is None or len(s) < 5:
+        return out
+    end, last = s.index[-1], float(s.iloc[-1])
+    for lab, months in PERIODS:
+        if months is None:
+            start_at = pd.Timestamp(end.year, 1, 1) - pd.Timedelta(days=1)
+        else:
+            start_at = end - pd.DateOffset(months=months)
+        if s.index[0] > start_at + pd.Timedelta(days=6):
+            out[lab] = None
+            continue
+        base = s.loc[:start_at]
+        if base.empty:
+            out[lab] = None
+            continue
+        r = last / float(base.iloc[-1]) - 1
+        if months and months >= 36:
+            r = (1 + r) ** (12 / months) - 1
+        out[lab] = round(r * 100, 1)
+    return out
