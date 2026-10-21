@@ -370,6 +370,25 @@ def price_risk(hist, bench=None):
 
 # ---------------------------------------------------------------- presentation ----------
 # ---------------------------------------------------------------- the page --------------
+def thin_series(series, buckets=300):
+    """Cut a long price series down to at most two points per bucket, keeping each
+    bucket's high and low in date order. The shape, the extremes and the first and last
+    close all survive, which is what the chart and the window table read."""
+    n = len(series)
+    if n <= buckets * 2:
+        return series
+    vals = series.to_numpy()
+    keep = {0, n - 1}
+    edges = np.linspace(0, n, buckets + 1).astype(int)
+    for a, b in zip(edges[:-1], edges[1:]):
+        if b <= a:
+            continue
+        chunk = vals[a:b]
+        keep.add(a + int(np.nanargmax(chunk)))
+        keep.add(a + int(np.nanargmin(chunk)))
+    return series.iloc[sorted(keep)]
+
+
 SPANS = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504, '5Y': 1260, '10Y': 2520, 'Max': None}
 
 
@@ -396,7 +415,7 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
             raw = raw[0] if raw else None
         return raw
 
-    span_label, close, ma50, ma200, spans = '1Y', None, None, None, []
+    span_label, close, ma50, ma200, spans, charts = '1Y', None, None, None, [], []
     if hist is not None and 'Close' in hist and len(hist) > 5:
         spans = [k for k, n in SPANS.items() if n is None or len(hist) >= n * 0.6]
         wanted = qp('span')
@@ -405,9 +424,17 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
         # averages are computed on the full series and then sliced, so a short window still
         # carries a correct 200 day line rather than a truncated one
         full_ma50, full_ma200 = full.rolling(50).mean(), full.rolling(200).mean()
-        n = SPANS[span_label]
-        close = full if n is None else full.tail(n)
-        ma50, ma200 = full_ma50.reindex(close.index), full_ma200.reindex(close.index)
+        # Every range is drawn now, not just the selected one. The page then switches
+        # between them in the browser with no rerun, so changing the range is instant.
+        # Each series is thinned to a few hundred points first: the chart is 720 units
+        # wide, so more points add weight without adding anything the eye can see.
+        for lab in spans:
+            n = SPANS[lab]
+            win = full if n is None else full.tail(n)
+            win = thin_series(win)
+            charts.append((lab, win, full_ma50.reindex(win.index),
+                           full_ma200.reindex(win.index)))
+        close, ma50, ma200 = next((c, a, b) for lab, c, a, b in charts if lab == span_label)
 
     # everything except span, so a range click keeps the company it is looking at
     keep = [(k, qp(k)) for k in ('ticker', 'isin', 'ccy')]
@@ -426,7 +453,7 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
                     dupont(fin, bs), *quality_of_earnings(fin, cf),
                     capital_allocation(cf), per_share_growth(fin, bs),
                     span_label, close, ma50, ma200, lede, spans, base_query,
-                    percentile_of)
+                    percentile_of, charts=charts)
     st.markdown(html, unsafe_allow_html=True)
 
     # the report, as a standalone file. The page is already one block of self contained
