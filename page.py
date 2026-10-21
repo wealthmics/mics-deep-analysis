@@ -241,6 +241,25 @@ involved, which matters because Streamlit strips script tags out of markdown. */
 font-weight:700;padding:5px 11px;border-radius:4px;text-decoration:none;display:inline-block}
 .an .sbtn:hover{border-color:#1f3864}
 .an .sbtn.on{background:#1f3864;border-color:#1f3864;color:#fff}
+/* Range switching happens in the browser. Every range is already on the page as its own
+panel, and the buttons are radio inputs wrapped in labels, so a click swaps the panel with
+CSS alone - no rerun, no reload, no script (Streamlit strips scripts from markdown).
+Before the first click no radio is checked, so the .on panel and button show the default
+range. Without :has support the default range simply stays on screen. */
+.an .spanset input{position:absolute;opacity:0;width:0;height:0;margin:0;pointer-events:none}
+.an label.sbtn{cursor:pointer;user-select:none}
+.an .spanpanel{display:none}
+.an .spanpanel.on{display:block}
+.an .spanset:has(input:checked) .spanpanel{display:none}
+.an .tabs:has(input:checked) .sbtn.on{background:#fff;border-color:#d8dee9;color:#1f3864}
+.an .tabs .sbtn.sbtn:has(input:checked){background:#1f3864;border-color:#1f3864;color:#fff}
+.an .spanset:has(.si-3M:checked) .sp-3M{display:block}
+.an .spanset:has(.si-6M:checked) .sp-6M{display:block}
+.an .spanset:has(.si-1Y:checked) .sp-1Y{display:block}
+.an .spanset:has(.si-2Y:checked) .sp-2Y{display:block}
+.an .spanset:has(.si-5Y:checked) .sp-5Y{display:block}
+.an .spanset:has(.si-10Y:checked) .sp-10Y{display:block}
+.an .spanset:has(.si-Max:checked) .sp-Max{display:block}
 /* Every row in the rail is the same two column grid, so the values line up down the
 whole column instead of each card finding its own right edge. */
 .an .kv{display:flex;justify-content:space-between;align-items:baseline;
@@ -696,6 +715,30 @@ def peer_summary(tv, stats):
 
 
 # ------------------------------------------------------------------ the page ------------
+def span_panels(charts, current, risk):
+    """Tabs plus one panel per range, all on the page at once. See the .spanset CSS."""
+    tabs, panels = [], []
+    for lab, close, ma50, ma200 in charts:
+        on = lab == current
+        tabs.append(f'<label class="sbtn{" on" if on else ""}">'
+                    # no checked attribute on purpose: Streamlit renders this HTML through
+                    # React, which would turn a checked radio into a frozen controlled input.
+                    # The default range is shown by the .on class until the first click.
+                    f'<input type="radio" name="span" class="si-{lab}">{lab}</label>')
+        first = float(close.iloc[0])
+        change = (float(close.iloc[-1]) / first - 1) * 100 if first else None
+        window_row = (f'<tr><td class="lab">Window high and low</td><td class="val num">'
+                      f'{f(float(close.max()))} / {f(float(close.min()))}</td>'
+                      f'<td class="lab">Change over the window</td>'
+                      f'<td class="val num">{minus(f(change, "pct"))}</td></tr>')
+        panels.append(f'<div class="spanpanel sp-{lab}{" on" if on else ""}">'
+                      + chart_frame(close, lab, svg_price(close, ma50, ma200),
+                                    svg_drawdown(close))
+                      + f'<table style="margin-top:16px">{window_row}</table></div>')
+    return (f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
+            f'{"".join(panels)}</div>')
+
+
 def span_links(spans, current, base_query):
     """Range buttons as links rather than a widget, so they sit inside the chart card.
 
@@ -712,7 +755,7 @@ def span_links(spans, current, base_query):
 
 def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qoe_rows,
           qoe_verdict, capital, per_share, span_label, close, ma50, ma200, lede='',
-          spans=None, base_query='', percentile_of=None):
+          spans=None, base_query='', percentile_of=None, charts=None):
     """Assemble the whole page. Every argument is already computed; this only lays out."""
     info = (yf_data or {}).get('info') or {}
     ccy = tv.get('ccy') or info.get('currency') or ''
@@ -876,15 +919,16 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
 
     # price and drawdown
     if close is not None and len(close) > 5:
-        first, last = close.index[0], close.index[-1]
+        longest = charts[-1][1] if charts else close
+        first, last = longest.index[0], close.index[-1]
         start_txt = first.strftime('%B %Y') if hasattr(first, 'strftime') else str(first)
         window = close
         change = (float(window.iloc[-1] / window.iloc[0] - 1) * 100
                   if float(window.iloc[0]) else None)
         full_dd = risk.get('max_drawdown_pct')
-        rows = [
+        rows = ([] if charts else [
             ('Window high and low', f'{f(float(window.max()))} / {f(float(window.min()))}',
-             'Change over the window', minus(f(change, 'pct'))),
+             'Change over the window', minus(f(change, 'pct')))]) + [
             ('Deepest fall, full history', minus(f(full_dd, 'pct')),
              'Volatility, annualised', f(risk.get('vol_1y_pct'), 'pct')),
             ('Against the 200 day average', minus(f(risk.get('pct_vs_200dma'), 'pct')),
@@ -908,10 +952,11 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'the two lighter lines are the 50 and 200 day averages. The lower panel is the '
             f'fall from each running peak. Hover anywhere on either chart for the date and '
             f'the level.</div>'
-            + (span_links(spans, span_label, base_query) if spans else '')
-            + chart_frame(close, span_label, svg_price(close, ma50, ma200),
-                          svg_drawdown(close))
-            + f'<table style="margin-top:16px">{table}</table>{tail}</div>')
+            + (span_panels(charts, span_label, risk) if charts else
+               (span_links(spans, span_label, base_query) if spans else '')
+               + chart_frame(close, span_label, svg_price(close, ma50, ma200),
+                             svg_drawdown(close)))
+            + f'<table style="margin-top:{"4" if charts else "16"}px">{table}</table>{tail}</div>')
 
     # DuPont
     if dupont_rows:
