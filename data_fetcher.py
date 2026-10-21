@@ -360,3 +360,95 @@ def get_ticker_data_by_isin(isin: str, expect_currency: str = None) -> dict:
     data["resolved_from_isin"] = isin
     data["isin_resolution"] = res
     return data
+
+
+# ----------------------------------------------------------------- ticker resolution --
+# For names the screener has no ISIN for. TradingView writes the bare local ticker (2330,
+# NOVO_B, 7203), Yahoo wants its own symbol with the venue suffix (2330.TW, NOVO-B.CO,
+# 7203.T). Yahoo's search is asked with the ticker first and the company name second, and
+# the listing in the expected currency is taken. US tickers only need the share-class
+# separator swapped (BRK.B -> BRK-B). Cached like the ISIN lookups.
+LISTING_CACHE_VERSION = 1
+
+
+def _yahoo_search(query, n=10):
+    try:
+        return list(getattr(yf, "Search")(query, max_results=n).quotes or [])
+    except Exception:
+        try:
+            r = get_session().get(
+                "https://query2.finance.yahoo.com/v1/finance/search",
+                params={"q": query, "quotesCount": n, "newsCount": 0}, timeout=15)
+            r.raise_for_status()
+            return r.json().get("quotes", []) or []
+        except Exception:
+            return []
+
+
+def _base(symbol):
+    s = str(symbol or "").upper().split(".")[0]
+    s = re.sub(r"[^A-Z0-9]", "", s)
+    return s.lstrip("0") or s
+
+
+def resolve_listing(ticker: str, name: str = None, expect_currency: str = None,
+                    force_refresh: bool = False) -> dict:
+    """TradingView ticker (+ company name, currency) -> Yahoo symbol, or {'error': ...}."""
+    ticker = str(ticker or "").strip().upper()
+    if not ticker:
+        return {"error": "no ticker"}
+    want = str(expect_currency or "").upper() or None
+    want = {"GBX": "GBP", "ZAC": "ZAR", "ILA": "ILS"}.get(want, want)
+
+    if want in (None, "USD") and re.fullmatch(r"[A-Z]{1,5}([._/][A-Z])?", ticker):
+        sym = re.sub(r"[._/]", "-", ticker)
+        return {"symbol": sym, "exchange": "US", "currency": "USD", "name": name,
+                "note": "US ticker, used as is"}
+
+    cache_key = f"TV:{ticker}:{want or ''}"
+    cache = _load_isin_cache()
+    hit = cache.get(cache_key)
+    if (not force_refresh and hit and "symbol" in hit
+            and hit.get("_v") == LISTING_CACHE_VERSION):
+        return dict(hit, note=(hit.get("note", "") + " (cached)"))
+
+    def ccy_of(q):
+        direct = q.get("currency")
+        if direct:
+            return str(direct).upper()
+        return EXCHANGE_CURRENCY.get(str(q.get("exchange", "")).upper())
+
+    chosen, how = None, ""
+    for query, label in ((ticker, "ticker"), (name, "company name")):
+        if not query:
+            continue
+        eq = [q for q in _yahoo_search(query)
+              if str(q.get("quoteType", "")).upper() in ("EQUITY", "ETF") and q.get("symbol")]
+        same_ticker = [q for q in eq if _base(q["symbol"]) == _base(ticker)]
+        in_ccy = [q for q in eq if want and ccy_of(q) == want]
+        both = [q for q in same_ticker if q in in_ccy]
+        if both:
+            chosen, how = both[0], f"matched on {label} and currency"
+        elif label == "company name" and in_ccy:
+            chosen, how = in_ccy[0], "matched on company name and currency"
+        elif same_ticker and not want:
+            chosen, how = same_ticker[0], f"matched on {label}"
+        if chosen:
+            break
+
+    if not chosen:
+        out = {"error": f"Yahoo search found no {want or ''} listing for {ticker}".replace("  ", " "),
+               "_v": LISTING_CACHE_VERSION}
+        cache[cache_key] = out
+        _save_isin_cache(cache)
+        return out
+
+    out = {"symbol": chosen.get("symbol"),
+           "exchange": chosen.get("exchDisp") or chosen.get("exchange"),
+           "currency": ccy_of(chosen),
+           "name": chosen.get("shortname") or chosen.get("longname"),
+           "note": how + " (no ISIN in the feed for this name)",
+           "_v": LISTING_CACHE_VERSION}
+    cache[cache_key] = out
+    _save_isin_cache(cache)
+    return out
