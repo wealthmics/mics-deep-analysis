@@ -7,6 +7,8 @@ numpy>=1.24.0
 plotly>=5.15.0             # charts in the audit view
 scipy>=1.10.0              # linregress, used by the momentum and risk block
 requests>=2.31.0           # the browser-headed session in data_fetcher.get_session
+openpyxl>=3.1.0            # the Excel export of a company page
+python-pptx>=0.6.23        # the PowerPoint export of a company page
 
 # Note on yfinance versions. Around 0.2.5x the library moved from requests to curl_cffi
 # for its own transport, and a plain requests Session passed into yf.Ticker can be
