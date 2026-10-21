@@ -26,6 +26,7 @@ import pandas as pd
 import streamlit as st
 
 import data_fetcher as df_mod
+import risk as rk
 import financial_formulas as ff
 
 st.set_page_config(page_title='MICS Equity Analysis', layout='wide',
@@ -135,6 +136,8 @@ def percentile_of(value, stats_block, metric):
     """
     if value is None or not stats_block or metric not in stats_block:
         return None
+    if metric in ('pe', 'fpe') and value <= 0:      # a multiple of a loss has no ranking
+        return None
     q = stats_block[metric]
     p25, med, p75 = q['p25'], q['median'], q['p75']
     higher_better = HIGHER_IS_BETTER.get(metric, True)
@@ -148,14 +151,12 @@ def percentile_of(value, stats_block, metric):
     else:
         band, rank = 'top quartile', 4
 
-    # for a metric where low is good, the wording has to flip or it reads backwards
+    # one vocabulary for every ratio, always meaning better or worse for the holder. A low
+    # P/E is the good end, so its rank is flipped before the words are chosen.
     if not higher_better:
         rank = 5 - rank
-        band = {1: 'worst quartile', 2: 'below average', 3: 'better than median',
-                4: 'best quartile'}[rank]
-    else:
-        band = {1: 'worst quartile', 2: 'below median', 3: 'above median',
-                4: 'best quartile'}[rank]
+    band = {1: 'worst quartile', 2: 'worse than median', 3: 'better than median',
+            4: 'best quartile'}[rank]
 
     return {'band': band, 'rank': rank, 'p25': p25, 'median': med, 'p75': p75,
             'n': q.get('n')}
@@ -264,22 +265,25 @@ def quality_of_earnings(fin, cf):
     verdict = None
     if len(usable) >= 2:
         avg = sum(r['cfo_to_ni'] for r in usable) / len(usable)
-        loss_years = sum(1 for r in rows if (r.get('net_income') or 0) <= 0)
-        caveat = ((f' The loss year is excluded' if loss_years == 1 else
-                   f' The {loss_years} loss years are excluded')
-                  + ', since a ratio against a loss carries no meaning.'
-                  if loss_years else '')
+        ahead = sum(1 for r in usable if r['cfo_to_ni'] >= 1)
+        loss_years = sum(1 for r in rows if r.get('net_income') is not None
+                         and r['net_income'] <= 0)
+        caveat = ((' The loss year is left out' if loss_years == 1 else
+                   f' The {loss_years} loss years are left out')
+                  + ', because a ratio against a loss has no meaning.' if loss_years else '')
+        years = f'{ahead} of the {len(usable)} profitable years'
         if avg >= 1.1:
-            verdict = ('<b>The profit is backed by cash.</b> Operating cash flow has run '
-                       'ahead of reported earnings in every profitable year here, which is '
-                       'the order you want them in.' + caveat)
+            verdict = (f'<b>The profit is backed by cash.</b> Operating cash flow averaged '
+                       f'{avg:.2f} times reported profit, and exceeded it in {years}.'
+                       + caveat)
         elif avg >= 0.9:
-            verdict = ('<b>Cash and profit track each other.</b> Nothing here to flag either '
-                       'way.' + caveat)
+            verdict = (f'<b>Cash and profit track each other</b>, at {avg:.2f} times on '
+                       f'average. Nothing to flag either way.' + caveat)
         else:
-            verdict = ('<b>Profit is running ahead of cash.</b> That gap is the first thing '
-                       'to understand about this company, ahead of anything else on this '
-                       'page.' + caveat)
+            verdict = (f'<b>Profit is running ahead of cash.</b> Operating cash flow averaged '
+                       f'only {avg:.2f} times reported profit, and reached it in {years}. '
+                       f'That gap is worth understanding before anything else on this page.'
+                       + caveat)
     return rows, verdict
 
 
@@ -389,7 +393,7 @@ def thin_series(series, buckets=300):
     return series.iloc[sorted(keep)]
 
 
-SPANS = {'3M': 63, '6M': 126, '1Y': 252, '2Y': 504, '5Y': 1260, '10Y': 2520, 'Max': None}
+SPANS = rk.SPANS
 
 
 def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
@@ -416,11 +420,20 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
         return raw
 
     span_label, close, ma50, ma200, spans, charts = '1Y', None, None, None, [], []
+    risk = price_risk(hist)
+    ccy = (tv or {}).get('ccy') or ((yf_data or {}).get('info') or {}).get('currency')
+    us_listed = (tv or {}).get('country') == 'United States' or str(ccy or '').upper() == 'USD'
+    bench = load_benchmark()
+    bench_close = bench['Close'] if bench is not None and 'Close' in bench else None
+    windows = {}
     if hist is not None and 'Close' in hist and len(hist) > 5:
         spans = [k for k, n in SPANS.items() if n is None or len(hist) >= n * 0.6]
         wanted = qp('span')
         span_label = wanted if wanted in spans else ('1Y' if '1Y' in spans else spans[-1])
         full = hist['Close'].dropna()
+        # every figure under the chart is measured on the full daily series for its window,
+        # never on the thinned series the chart draws
+        windows = rk.all_windows(full, bench_close, spans, us_listed)
         # averages are computed on the full series and then sliced, so a short window still
         # carries a correct 200 day line rather than a truncated one
         full_ma50, full_ma200 = full.rolling(50).mean(), full.rolling(200).mean()
@@ -433,28 +446,37 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
             win = full if n is None else full.tail(n)
             win = thin_series(win)
             charts.append((lab, win, full_ma50.reindex(win.index),
-                           full_ma200.reindex(win.index)))
-        close, ma50, ma200 = next((c, a, b) for lab, c, a, b in charts if lab == span_label)
+                           full_ma200.reindex(win.index), windows.get(lab) or {}))
+        close, ma50, ma200 = next((c, a, b) for lab, c, a, b, _ in charts if lab == span_label)
+        risk['dd_full'] = rk.drawdown(full)
+    for lab, key in (('1Y', 'beta_1y'), ('2Y', 'beta_2y'), ('5Y', 'beta_5y')):
+        b = (windows.get(lab) or {}).get('bench') or {}
+        risk[key] = b.get('beta')
+        risk[key.replace('beta', 'corr')] = b.get('corr')
+    risk['windows'] = windows
+    risk['ccy'] = ccy
+    risk['bench_ok'] = bench_close is not None
 
     # everything except span, so a range click keeps the company it is looking at
     keep = [(k, qp(k)) for k in ('ticker', 'isin', 'ccy')]
     base_query = ''.join(f'{k}={v}&' for k, v in keep if v)
 
-    risk = price_risk(hist)
-    # a second beta over five years, now that the full history is available
-    if hist is not None and 'Close' in hist and len(hist) > 1300:
-        risk['beta_5y'] = price_risk(hist.tail(1260)).get('beta_2y')
-    else:
-        risk['beta_5y'] = None
-
     lede = st.session_state.get('lede', '')
 
+    dup = dupont(fin, bs)
+    qoe_rows, qoe_verdict = quality_of_earnings(fin, cf)
+    capital, per_share = capital_allocation(cf), per_share_growth(fin, bs)
     html = pg.build(tv or {}, isin, yf_data, stats, forensics, resolution, risk,
-                    dupont(fin, bs), *quality_of_earnings(fin, cf),
-                    capital_allocation(cf), per_share_growth(fin, bs),
+                    dup, qoe_rows, qoe_verdict, capital, per_share,
                     span_label, close, ma50, ma200, lede, spans, base_query,
                     percentile_of, charts=charts)
     st.markdown(html, unsafe_allow_html=True)
+    ctx = {'tv': tv or {}, 'isin': isin, 'info': (yf_data or {}).get('info') or {},
+           'stats': stats, 'forensics': forensics, 'risk': risk, 'dupont': dup,
+           'qoe_rows': qoe_rows, 'qoe_verdict': qoe_verdict, 'capital': capital,
+           'per_share': per_share, 'lede': lede, 'resolution': resolution,
+           'hist': hist, 'bench': bench_close, 'spans': spans,
+           'percentile_of': percentile_of}
 
     # the report, as a standalone file. The page is already one block of self contained
     # HTML with print rules, so the download opens and prints to PDF with the layout intact.
@@ -471,17 +493,29 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
               'body{margin:0;background:#e7ecf3;padding:16px}'
               '@media print{body{background:#fff;padding:0}}</style></head><body>'
               + html + '</body></html>')
-    st.download_button('Download this report', report,
-                       file_name=f'{ticker}_equity_analysis_'
-                                 f'{datetime.date.today():%Y-%m-%d}.html',
-                       mime='text/html')
-    st.caption('Downloads one self contained file. Open it and print to PDF, or press '
-               'Ctrl+P on this page. Before saving, untick **Headers and footers** in the '
-               'print dialog: that setting is what prints the date, the page title and the '
-               'file path down the edges of the page, and no stylesheet can switch it off. '
-               'Chrome remembers the choice afterwards. The report prints its own header '
-               'with the company, the ticker and the data date, so nothing is lost by '
-               'turning the browser one off.')
+    stem = f'MICS_{re.sub(r"[^A-Za-z0-9]+", "-", str(ticker)).strip("-")}_analysis_' \
+           f'{datetime.date.today():%Y-%m-%d}'
+    c1, c2, c3 = st.columns(3)
+    try:
+        import exports as xp
+        with c1:
+            st.download_button('Excel workbook', xp.build_xlsx(ctx), file_name=stem + '.xlsx',
+                               mime='application/vnd.openxmlformats-officedocument.'
+                                    'spreadsheetml.sheet', use_container_width=True)
+        with c2:
+            st.download_button('PowerPoint', xp.build_pptx(ctx), file_name=stem + '.pptx',
+                               mime='application/vnd.openxmlformats-officedocument.'
+                                    'presentationml.presentation', use_container_width=True)
+    except Exception as e:                       # an export must never take the page down
+        with c1:
+            st.caption(f'Excel and PowerPoint exports are unavailable: {e}')
+    with c3:
+        st.download_button('Printable page (HTML)', report, file_name=stem + '.html',
+                           mime='text/html', use_container_width=True)
+    st.caption('The Excel workbook and the PowerPoint carry the same figures as this page, '
+               'including every price window. The printable page is one self contained file: '
+               'open it and press Ctrl+P to save a PDF, and untick **Headers and footers** in '
+               'the print dialog so the browser does not print a file path down the edges.')
 
     with st.expander('Write the reading that appears at the foot of this page'):
         st.text_area('One paragraph, in your own words. The three columns below it are '
@@ -682,6 +716,15 @@ def load_tv_feed():
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_sector_stats():
     return fetch_feed(SECTOR_URL)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_benchmark():
+    """The S&P 500, for beta and relative performance. None if Yahoo will not give it."""
+    try:
+        return df_mod.get_price_history(rk.BENCH_SYMBOL)
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=900, show_spinner=False)
