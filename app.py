@@ -19,6 +19,7 @@ screener publishes to GitHub Pages.
 import datetime
 import json
 import math
+import re
 
 import numpy as np
 import pandas as pd
@@ -83,17 +84,44 @@ def fetch_feed(url, timeout=20):
     return r.json()
 
 
-def lookup(feed, isin=None, ticker=None):
-    """Find a stock in the feed by ISIN, falling back to a ticker scan."""
+def _tkr(value):
+    """Ticker for comparison. Older feeds stored numeric tickers as numbers (2330.0)."""
+    t = str(value or '').strip().upper()
+    if re.fullmatch(r'\d+(\.0+)?', t):
+        t = str(int(float(t)))
+    return t
+
+
+def lookup(feed, isin=None, ticker=None, ccy=None):
+    """Find a stock in the feed by its key, falling back to a ticker scan.
+
+    The key is an ISIN where the screener knew one, and TV:TICKER:CCY otherwise. On a
+    ticker scan the listing in the expected currency wins, because the same ticker can
+    exist on several exchanges (2222 is Aramco in Riyadh and a different company in Tokyo).
+    """
     stocks = (feed or {}).get('stocks', {})
     if isin and isin.upper() in stocks:
         return isin.upper(), stocks[isin.upper()]
     if ticker:
-        want = ticker.upper()
+        want, hits = _tkr(ticker), []
         for key, entry in stocks.items():
-            if str(entry.get('ticker', '')).upper() == want:
-                return key, entry
+            if _tkr(entry.get('ticker')) == want:
+                hits.append((key, entry))
+        if hits:
+            if ccy:
+                same = [h for h in hits if str(h[1].get('ccy') or '').upper() == ccy.upper()]
+                if same:
+                    return same[0]
+            return hits[0]
     return None, None
+
+
+def real_isin(key, entry=None):
+    """The ISIN to show and to resolve on, or None. A TV: key is never an ISIN."""
+    for cand in ((entry or {}).get('isin'), key):
+        if cand and df_mod.looks_like_isin(str(cand)):
+            return str(cand).upper()
+    return None
 
 
 # ---------------------------------------------------------------- peer position ---------
@@ -552,7 +580,7 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
             if extra_key != 'roe':
                 r['ROE'] = pg.f(e.get('roe'), 'pct')
             r['Market cap'] = pg.f(e.get('mcap'), 'money')
-            r['ISIN'] = isin
+            r['ISIN'] = real_isin(isin, e) or ''
             out.append(r)
         st.dataframe(pd.DataFrame(out), use_container_width=True, hide_index=True)
 
@@ -662,7 +690,7 @@ def run_company(ticker, isin, ccy):
     tv_entry, tv_isin, stats = None, isin, {}
     try:
         feed = load_tv_feed()
-        tv_isin, tv_entry = lookup(feed, isin=isin, ticker=ticker)
+        tv_isin, tv_entry = lookup(feed, isin=isin, ticker=ticker, ccy=ccy)
         if tv_entry is not None:
             tv_entry = dict(tv_entry)
             tv_entry['_periods'] = feed.get('periods', {})
@@ -676,12 +704,24 @@ def run_company(ticker, isin, ccy):
     except Exception:
         stats = {}
 
-    resolution, symbol = None, (ticker or '').upper() or None
-    if isin and df_mod.looks_like_isin(isin):
-        with st.spinner(f'Resolving {isin} on Yahoo...'):
-            resolution = df_mod.resolve_isin(isin, expect_currency=ccy)
-        if resolution.get('symbol'):
-            symbol = resolution['symbol']
+    # The ISIN, if there is one: from the feed entry, the feed key or the link. A TV: key
+    # means the screener had no ISIN for this name, which is fine - the TradingView numbers
+    # are current either way, and Yahoo is found through the ticker instead.
+    true_isin = real_isin(tv_isin, tv_entry) or (isin if isin and df_mod.looks_like_isin(isin)
+                                                  else None)
+    ccy = ccy or (tv_entry or {}).get('ccy')
+    if not ticker and tv_entry:
+        ticker = tv_entry.get('ticker')
+    raw = (tv_entry or {}).get('ticker') or ticker
+    resolution, symbol = None, (str(raw).strip().upper() if raw else None)
+    if true_isin:
+        with st.spinner(f'Resolving {true_isin} on Yahoo...'):
+            resolution = df_mod.resolve_isin(true_isin, expect_currency=ccy)
+    elif symbol:
+        with st.spinner(f'Finding {symbol} on Yahoo...'):
+            resolution = df_mod.resolve_listing(symbol, (tv_entry or {}).get('name'), ccy)
+    if resolution and resolution.get('symbol'):
+        symbol = resolution['symbol']
 
     yf_data, forensics = None, {}
     if symbol:
@@ -727,7 +767,7 @@ def run_company(ticker, isin, ccy):
                           'ccy': tv_entry.get('ccy') or ''})
         st.session_state['recent'] = recent[:8]
 
-    render(st, tv_entry or {}, tv_isin or isin, yf_data, stats, forensics, resolution)
+    render(st, tv_entry or {}, true_isin, yf_data, stats, forensics, resolution)
     st.divider()
     if st.button('Back to search'):
         st.query_params.clear()
