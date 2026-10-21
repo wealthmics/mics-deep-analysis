@@ -640,7 +640,8 @@ def chart_frame(close, span_label, price_svg, dd_svg):
 
     return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{price_svg}</div>'
             f'{date_row}'
-            f'<div class="ddlabel">Fall from the running peak, same period</div>'
+            f'<div class="ddlabel">Drawdown: how far the price sat below its highest '
+            f'level so far in this window</div>'
             f'<div class="plot dd"><div class="yaxis">{dd_axis}</div>{dd_svg}</div>'
             f'{date_row}')
 
@@ -678,18 +679,17 @@ def peer_bars(tv, stats):
     """One row per ratio: navy bar for the company, gold line for the sector median."""
     rows = []
     for key, label, kind, _higher in PEER_ROWS:
-        val = tv.get(key)
-        block = (stats or {}).get(key)
-        if val is None or not block or not block.get('median'):
+        val, med = _comparable(tv, stats, key)
+        if val is None:
             continue
-        med = block['median']
-        if med == 0:
-            continue
-        ratio = abs(val) / abs(med)
+        # a negative figure gets no bar at all. Scaling by the absolute value drew a loss of
+        # 20% as a bar longer than a sector median of 10%, which read as better.
+        ratio = max(val, 0) / med
         wid = min(100.0, ratio * MEDIAN_AT)
         capped = ratio * MEDIAN_AT > 100
         tip = (f'{label}: {minus(f(val, kind))} against a sector median of '
-               f'{minus(f(med, kind))}, {ratio:,.1f} times the median')
+               f'{minus(f(med, kind))}'
+               + (f', {ratio:,.1f} times the median' if val > 0 else ', below zero'))
         cap = ('<span style="position:absolute;right:4px;top:3px;font-size:9px;'
                'font-weight:700;color:#fff">&#9656;</span>' if capped else '')
         rows.append(
@@ -700,41 +700,149 @@ def peer_bars(tv, stats):
             f'<div class="bp num">{minus(f(med, kind))}</div></div>')
     return ''.join(rows)
 
-def peer_summary(tv, stats):
-    """How many of the compared ratios sit in the better half of the sector."""
-    better = total = 0
-    for key, _label, _kind, higher in PEER_ROWS:
-        val, block = tv.get(key), (stats or {}).get(key)
-        if val is None or not block:
+def _comparable(tv, stats, key):
+    """The company value and sector median for one ratio, or (None, None) when the
+    comparison would mislead: no median, a median at or below zero, or a P/E on a loss."""
+    val, block = tv.get(key), (stats or {}).get(key) or {}
+    med = block.get('median')
+    if tv.get('gics') == 'Financials' and key in ('debt_equity', 'interest_cover'):
+        return None, None          # a lender's debt is its raw material, not a risk measure
+    if val is None or med is None or med <= 0:
+        return None, None
+    if key == 'pe' and val <= 0:
+        return None, None
+    return val, med
+
+
+def peer_summary(tv, stats, detail=False):
+    """How many of the compared ratios sit on the favourable side of the sector median.
+
+    Favourable means higher for returns, margins and interest cover, lower for P/E and
+    debt to equity. With detail=True the names of the ratios on each side come back too.
+    """
+    better, worse = [], []
+    for key, label, _kind, higher in PEER_ROWS:
+        val, med = _comparable(tv, stats, key)
+        if val is None:
             continue
-        total += 1
-        med = block['median']
-        if (val > med) if higher else (val < med):
-            better += 1
-    return better, total
+        ((better if ((val > med) if higher else (val < med)) else worse)
+         .append(label.lower() if label != 'P/E' else 'P/E'))
+    if detail:
+        return better, worse
+    return len(better), len(better) + len(worse)
+
+
+def _yahoo_price(info, tv):
+    """A price in the same currency as Yahoo's own levels (52 week range, analyst targets).
+
+    The TradingView price can be a different listing from the one Yahoo resolved, for
+    example the local line against a US ADR, so comparing it with Yahoo's targets gave an
+    upside figure in two currencies at once. Yahoo's own price is used; the TradingView one
+    only when both are known to be in the same currency.
+    """
+    p = info.get('currentPrice') or info.get('regularMarketPrice')
+    if p:
+        return p
+    if tv.get('price') and info.get('currency') and \
+            str(info.get('currency')).upper() == str(tv.get('ccy') or '').upper():
+        return tv.get('price')
+    return None
+
+
+def _share_trend(sc):
+    if sc is None:
+        return 'not reported'
+    if sc < -0.5:
+        return 'falling, buybacks'
+    if sc > 0.5:
+        return 'rising, new shares issued'
+    return 'broadly flat'
+
+
+def _sector_reading(tv, stats):
+    good, bad = peer_summary(tv, stats, detail=True)
+    total = len(good) + len(bad)
+    if not total:
+        return ''
+    def names(xs):
+        return xs[0] if len(xs) == 1 else ', '.join(xs[:-1]) + ' and ' + xs[-1]
+    if not bad:
+        head = f'<b>On the favourable side of the sector median on all {total} measures.</b> '
+        tail = ('Strong relative numbers are the starting point; whether they last is the '
+                'question the rest of this page helps with.')
+    elif not good:
+        head = f'<b>On the weaker side of the sector median on all {total} measures.</b> '
+        tail = 'Any case for owning it has to rest on something other than these ratios.'
+    elif len(good) > len(bad):
+        head = f'<b>Ahead of the sector median on {len(good)} of {total} measures.</b> '
+        tail = f'It trails on {names(bad)}.'
+    elif len(good) < len(bad):
+        head = f'<b>Behind the sector median on {len(bad)} of {total} measures.</b> '
+        tail = f'It leads only on {names(good)}.'
+    else:
+        head = f'<b>Level with its sector, ahead on {len(good)} of {total} measures.</b> '
+        tail = f'It leads on {names(good)} and trails on {names(bad)}.'
+    note_pe = ('' if tv.get('pe') is None or tv.get('pe') > 0 else
+               ' P/E is left out because the company is loss making, so the ratio has no '
+               'meaning.')
+    return head + tail + note_pe
 
 
 # ------------------------------------------------------------------ the page ------------
+def _window_table(st, ccy, bench_ok):
+    """The figures under each chart, measured on the full daily series for that window."""
+    import risk as rk
+    if not st:
+        return ''
+    b = st.get('bench') or {}
+    dd = st.get('dd') or {}
+    rel = st.get('relative_pts')
+    rel_txt = 'n/a' if rel is None else (minus(f'{rel:+.1f}') + ' pts')
+    beta_txt = 'n/a' if b.get('beta') is None else f'{b["beta"]:.2f}'
+    corr_txt = 'n/a' if b.get('corr') is None else f'{b["corr"]:.2f}'
+    freq = f', {b["freq"]}' if b.get('freq') else ''
+    rows = [
+        ('High and low', f'{f(st.get("hi"))} / {f(st.get("lo"))}',
+         'Change over the window', minus(f(st.get('change_pct'), 'pct'))),
+        (f'{rk.BENCH_NAME}, same window', minus(f(b.get('bench_change_pct'), 'pct'))
+         if b else ('unavailable' if not bench_ok else 'n/a'),
+         f'Ahead of or behind the {rk.BENCH_NAME}', rel_txt),
+        ('Worst fall from a high', minus(f(dd.get('worst_pct'), 'pct')),
+         'Volatility, annualised', f(st.get('vol_pct'), 'pct')),
+        (f'Beta against the {rk.BENCH_NAME}{freq}', beta_txt,
+         'Correlation with the index', corr_txt),
+    ]
+    table = ''.join(f'<tr><td class="lab">{a}</td><td class="val num">{v}</td>'
+                    f'<td class="lab">{c}</td><td class="val num">{d}</td></tr>'
+                    for a, v, c, d in rows)
+    words = [rk.drawdown_sentence(dd), rk.beta_sentence(b, ccy)]
+    if rel is not None and b.get('bench_change_pct') is not None:
+        lead = ('ahead of' if rel > 0 else 'behind')
+        if abs(rel) >= 1:
+            words.append(f'Over {rk.SPAN_WORDS.get(st.get("label"), "this window")} the price '
+                         f'finished {abs(rel):.1f} percentage points {lead} the '
+                         f'{rk.BENCH_NAME}.')
+    text = ' '.join(w for w in words if w)
+    return (f'<table style="margin-top:16px">{table}</table>'
+            + (read(esc(text)) if text else ''))
+
+
 def span_panels(charts, current, risk):
     """Tabs plus one panel per range, all on the page at once. See the .spanset CSS."""
     tabs, panels = [], []
-    for lab, close, ma50, ma200 in charts:
+    ccy = (risk or {}).get('ccy')
+    bench_ok = (risk or {}).get('bench_ok')
+    for lab, close, ma50, ma200, st in charts:
         on = lab == current
         tabs.append(f'<label class="sbtn{" on" if on else ""}">'
                     # no checked attribute on purpose: Streamlit renders this HTML through
                     # React, which would turn a checked radio into a frozen controlled input.
                     # The default range is shown by the .on class until the first click.
                     f'<input type="radio" name="span" class="si-{lab}">{lab}</label>')
-        first = float(close.iloc[0])
-        change = (float(close.iloc[-1]) / first - 1) * 100 if first else None
-        window_row = (f'<tr><td class="lab">Window high and low</td><td class="val num">'
-                      f'{f(float(close.max()))} / {f(float(close.min()))}</td>'
-                      f'<td class="lab">Change over the window</td>'
-                      f'<td class="val num">{minus(f(change, "pct"))}</td></tr>')
         panels.append(f'<div class="spanpanel sp-{lab}{" on" if on else ""}">'
                       + chart_frame(close, lab, svg_price(close, ma50, ma200),
                                     svg_drawdown(close))
-                      + f'<table style="margin-top:16px">{window_row}</table></div>')
+                      + _window_table(st, ccy, bench_ok) + '</div>')
     return (f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
             f'{"".join(panels)}</div>')
 
@@ -786,9 +894,10 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
     meta = '<span class="sep">/</span>'.join(
         (f'<b>{esc(b)}</b>' if i == 0 else esc(b)) for i, b in enumerate(bits))
     lo52, hi52 = info.get('fiftyTwoWeekLow'), info.get('fiftyTwoWeekHigh')
+    ypx = _yahoo_price(info, tv)
     rng = ''
-    if lo52 and hi52 and hi52 > lo52 and price:
-        pos = max(0, min(100, (price - lo52) / (hi52 - lo52) * 100))
+    if lo52 and hi52 and hi52 > lo52 and ypx:
+        pos = max(0, min(100, (ypx - lo52) / (hi52 - lo52) * 100))
         rng = (f'<div class="rng">52 week range {f(lo52)} to {f(hi52)}, at {pos:.0f}%</div>'
                f'<div class="bar52"><i style="left:{pos:.0f}%"></i></div>')
     cls = 'up' if (ytd or 0) > 0 else ('down' if (ytd or 0) < 0 else '')
@@ -869,7 +978,10 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
                    else ('Neutral', 'n'))
         cells.append(cell('Accruals', minus(f(pct, 'pct')), band, c, 'Sloan, Yahoo'))
     usable = [r['cfo_to_ni'] for r in (qoe_rows or []) if r.get('cfo_to_ni') is not None]
-    if usable:
+    if gics in ('Financials', 'Real Estate'):
+        cells.append(cell('Cash conversion', 'n/a', 'n/a', 'n',
+                          'not meaningful for a lender or REIT'))
+    elif usable:
         avg = sum(usable) / len(usable)
         band, c = (('Backed', 'g') if avg >= 1.1 else ('In line', 'n') if avg >= 0.9
                    else ('Thin', 'r'))
@@ -905,58 +1017,41 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             ', not only those that cleared a screen, because a median of the winners would '
             'make everything look average.</div>'
             f'{bars}<div class="legend"><i></i>company<u></u>sector median</div>'
-            + (read(
-                (f'<b>Better than its sector on every measure compared.</b> ' if better == total
-                 else f'<b>Better than its sector on most of what is compared</b>, '
-                      f'{better} of {total}. ' if better > total / 2
-                 else f'<b>Behind its sector on most of what is compared</b>, only '
-                      f'{better} of {total}. ')
-                + ('The question that raises is durability rather than quality.'
-                   if better > total / 2
-                   else 'Whatever the case for owning it, these ratios are not it.'))
-               if total else '') +
+            + (read(_sector_reading(tv, stats)) if total else '') +
             '</div>')
 
     # price and drawdown
     if close is not None and len(close) > 5:
         longest = charts[-1][1] if charts else close
-        first, last = longest.index[0], close.index[-1]
+        first = longest.index[0]
         start_txt = first.strftime('%B %Y') if hasattr(first, 'strftime') else str(first)
-        window = close
-        change = (float(window.iloc[-1] / window.iloc[0] - 1) * 100
-                  if float(window.iloc[0]) else None)
-        full_dd = risk.get('max_drawdown_pct')
-        rows = ([] if charts else [
-            ('Window high and low', f'{f(float(window.max()))} / {f(float(window.min()))}',
-             'Change over the window', minus(f(change, 'pct')))]) + [
-            ('Deepest fall, full history', minus(f(full_dd, 'pct')),
-             'Volatility, annualised', f(risk.get('vol_1y_pct'), 'pct')),
-            ('Against the 200 day average', minus(f(risk.get('pct_vs_200dma'), 'pct')),
-             'Beta, 2 year and 5 year',
-             f'{f(risk.get("beta_2y"))} / {f(risk.get("beta_5y"))}'),
-        ]
+        ddf = risk.get('dd_full') or {}
+        if ddf.get('worst_pct') is not None:
+            when = (f'{ddf["peak"].strftime("%b %Y")} to {ddf["trough"].strftime("%b %Y")}'
+                    if hasattr(ddf.get('peak'), 'strftime') else '')
+            healed = ('regained' if ddf.get('recovered') is not None else 'not yet regained')
+            full_txt = f'{minus(f(ddf["worst_pct"], "pct"))}<br><small>{when}, {healed}</small>'
+        else:
+            full_txt = minus(f(risk.get('max_drawdown_pct'), 'pct'))
+        rows = [('Deepest fall, full record', full_txt,
+                 'Against the 200 day average', minus(f(risk.get('pct_vs_200dma'), 'pct')))]
         table = ''.join(
             f'<tr><td class="lab">{a}</td><td class="val num">{b}</td>'
             f'<td class="lab">{c}</td><td class="val num">{d}</td></tr>'
             for a, b, c, d in rows)
-        tail = ''
-        if full_dd is not None and full_dd < -50:
-            tail = read(f'<b>This has fallen further than most holders would sit through.</b> '
-                        f'A company can read well on every current ratio and still have put '
-                        f'its owners through a decline like that, which is why the full '
-                        f'record is shown here rather than the last two years.')
         left(
-            f'<div class="card"><span class="src y">Yahoo, daily</span>'
-            f'<h2>Price and drawdown</h2>'
-            f'<div class="sub">History available from {esc(start_txt)}. Navy is the close, '
-            f'the two lighter lines are the 50 and 200 day averages. The lower panel is the '
-            f'fall from each running peak. Hover anywhere on either chart for the date and '
-            f'the level.</div>'
+            f'<div class="card"><span class="src y">Yahoo, daily, adjusted close</span>'
+            f'<h2>Price, drawdown and risk</h2>'
+            f'<div class="sub">History from {esc(start_txt)}. Navy is the close, the two '
+            f'lighter lines are the 50 and 200 day averages. The lower panel shows how far '
+            f'the price was below its highest level so far, at every date. Pick a range and '
+            f'every figure under the chart, including beta against the S&amp;P 500, is '
+            f'recalculated for that range.</div>'
             + (span_panels(charts, span_label, risk) if charts else
                (span_links(spans, span_label, base_query) if spans else '')
                + chart_frame(close, span_label, svg_price(close, ma50, ma200),
                              svg_drawdown(close)))
-            + f'<table style="margin-top:{"4" if charts else "16"}px">{table}</table>{tail}</div>')
+            + f'<table style="margin-top:8px">{table}</table></div>')
 
     # DuPont
     if dupont_rows:
@@ -968,11 +1063,31 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<td class="val num">{minus(f(r["roe_pct"], "pct"))}</td></tr>'
             for r in dupont_rows)
         last = dupont_rows[-1]
-        driver = ('operating margin' if last['net_margin_pct'] >= 10 else
-                  'asset turnover' if last['asset_turnover'] >= 1 else
-                  'balance sheet leverage')
+        if last['net_margin_pct'] <= 0:
+            driver_txt = ('The latest year was a loss, so there is no return to decompose. '
+                          'The earlier rows show what the business earns when it is '
+                          'profitable.')
+        else:
+            lev, mar, turn = (last['equity_multiplier'], last['net_margin_pct'],
+                              last['asset_turnover'])
+            if lev >= 3 and mar < 10:
+                driver_txt = (f'The return leans mainly on <b>leverage</b>: assets are '
+                              f'{lev:.1f} times equity, while the net margin is only '
+                              f'{mar:.1f}%.')
+            elif mar >= 10:
+                driver_txt = (f'The return is driven mainly by <b>net margin</b> of '
+                              f'{mar:.1f}%' + (f', helped by leverage of {lev:.1f} times '
+                              f'equity.' if lev >= 3 else '.'))
+            elif turn >= 1:
+                driver_txt = (f'The return is driven mainly by <b>asset turnover</b>: the '
+                              f'business generates {turn:.2f} of revenue for each unit of '
+                              f'assets on a {mar:.1f}% net margin.')
+            else:
+                driver_txt = (f'No single driver stands out. A {mar:.1f}% net margin, turnover '
+                              f'of {turn:.2f} and leverage of {lev:.1f} times combine into a '
+                              f'{last["roe_pct"]:.1f}% return.')
         direction = ''
-        if len(dupont_rows) > 1:
+        if len(dupont_rows) > 1 and last['net_margin_pct'] > 0:
             firstr = dupont_rows[0]
             d_margin = last['net_margin_pct'] - firstr['net_margin_pct']
             d_lev = last['equity_multiplier'] - firstr['equity_multiplier']
@@ -992,10 +1107,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'from turnover or from leverage, and those are not the same business.</div>'
             f'<table><thead><tr><th>Year</th><th>Net margin</th><th>Asset turnover</th>'
             f'<th>Equity multiplier</th><th>ROE</th></tr></thead><tbody>{body}</tbody></table>'
-            + read(f'The return is driven mainly by <b>{driver}</b>.{direction} A return '
-                   f'earned on leverage is a different proposition from the same return '
-                   f'earned on margin, and the headline figure cannot tell them '
-                   f'apart.') + '</div>')
+            + read(driver_txt + direction) + '</div>')
 
     # cash conversion and capital allocation
     if qoe_rows and any(r.get('cfo_to_ni') is not None for r in qoe_rows):
@@ -1058,7 +1170,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<tr><td class="lab">Share count</td>'
             f'<td class="val num">{minus(f(ps.get("share_count_cagr_pct"), "pct"))}</td>'
             f'<td class="val" colspan="2">'
-            f'{"buying back" if (ps.get("share_count_cagr_pct") or 0) < 0 else "issuing"}'
+            f'{_share_trend(ps.get("share_count_cagr_pct"))}'
             f'</td></tr>')
         tail = ''
         if gap is not None and gap > 1:
@@ -1127,22 +1239,31 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         pe, med_pe = tv.get('pe'), stats.get('pe', {}).get('median')
         ev, pb = info.get('enterpriseToEbitda'), info.get('priceToBook')
         verdict = []
-        if pe is not None and med_pe:
+        financial = gics in ('Financials', 'Real Estate')
+        if pe is not None and pe <= 0:
+            verdict.append('Loss making on a trailing basis, so the P/E carries no meaning')
+        elif pe is not None and med_pe and med_pe > 0:
             ratio = pe / med_pe
             verdict.append(
-                'Materially cheaper than its sector on earnings' if ratio < 0.7 else
-                'Cheaper than its sector on earnings' if ratio < 0.95 else
-                'Priced in line with its sector' if ratio <= 1.15 else
-                'Dearer than its sector on earnings' if ratio < 1.6 else
-                'Priced well above its sector on earnings')
-        if ev is not None:
-            verdict.append('and the cash flow multiple is undemanding' if ev < 10 else
-                           'and the cash flow multiple is reasonable' if ev < 15 else
-                           'and the cash flow multiple leaves little room for '
-                           'disappointment')
-        if pb is not None and pb > 5:
-            verdict.append('most of the value sits in the earnings rather than the assets, '
-                           'so the multiple depends on those earnings holding')
+                f'On earnings it is materially cheaper than its sector, {ratio:.1f} times the '
+                f'median P/E' if ratio < 0.7 else
+                f'On earnings it is cheaper than its sector, {ratio:.1f} times the median P/E'
+                if ratio < 0.95 else
+                'On earnings it is priced in line with its sector' if ratio <= 1.15 else
+                f'On earnings it is dearer than its sector, {ratio:.1f} times the median P/E'
+                if ratio < 1.6 else
+                f'On earnings it is priced well above its sector, {ratio:.1f} times the '
+                f'median P/E')
+        if ev is not None and ev > 0 and not financial:
+            verdict.append('and EV to EBITDA is low in absolute terms' if ev < 8 else
+                           'and EV to EBITDA is moderate' if ev < 15 else
+                           'and EV to EBITDA is high, so the price assumes growth or '
+                           'durable margins')
+        elif ev is not None and ev <= 0 and not financial:
+            verdict.append('and EBITDA is negative, so EV to EBITDA cannot be read')
+        if pb is not None and pb > 5 and not financial:
+            verdict.append('most of the value sits in earnings power rather than the assets '
+                           'on the balance sheet')
         concl = note(sentence(verdict)) if verdict else ''
         rail(f'<div class="card"><span class="src y">Yahoo</span><h2>Valuation</h2>'
                  f'<div class="sub">Multiples TradingView does not export</div>{kv}'
@@ -1178,12 +1299,15 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             say = ('The one year figure is the only horizon the feed carries here, so there '
                    'is no longer record to weigh it against.')
         if one is not None and fiveann is not None:
-            say = ('The last year has run well ahead of the longer record, so recent strength '
-                   'is doing the work.' if one > fiveann * 2 + 5 else
-                   'The last year has lagged the longer record, so the recent period is the '
-                   'weaker part of the story.' if one < fiveann - 5 else
-                   'The last year is broadly in line with the longer record, which is the '
-                   'steadier version of this.')
+            gap = one - fiveann
+            say = (f'The last year ({minus(f(one, "pct"))}) ran well ahead of the five year '
+                   f'pace of {minus(f(fiveann, "pct"))} a year, so recent strength is doing '
+                   f'much of the work.' if gap > 10 else
+                   f'The last year ({minus(f(one, "pct"))}) lagged the five year pace of '
+                   f'{minus(f(fiveann, "pct"))} a year, so the recent period is the weaker '
+                   f'part of the record.' if gap < -10 else
+                   f'The last year ({minus(f(one, "pct"))}) is close to the five year pace of '
+                   f'{minus(f(fiveann, "pct"))} a year.')
         rail(f'<div class="card"><span class="src">TradingView, {esc(tv_date)}</span>'
                  f'<h2>Returns</h2><div class="sub">Price only, dividends excluded</div>'
                  f'{rows}' + (note(say) if say else '') + '</div>')
@@ -1223,7 +1347,8 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
     target = info.get('targetMeanPrice')
     if target or info.get('recommendationKey'):
         n_an = info.get('numberOfAnalystOpinions')
-        up = ((target / price - 1) * 100) if (target and price) else None
+        ypx = _yahoo_price(info, tv)
+        up = ((target / ypx - 1) * 100) if (target and ypx) else None
         lo, hi = info.get('targetLowPrice'), info.get('targetHighPrice')
         rows = [('Consensus', str(info.get('recommendationKey') or 'n/a').replace('_', ' ').title()),
                 ('Mean target', f(target)),
@@ -1232,14 +1357,14 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         kv = ''.join(f'<div class="kv"><span class="k">{a}</span>'
                      f'<span class="v num">{b}</span></div>' for a, b in rows)
         tail = ''
-        if lo and hi and price and (hi - lo) / price > 0.5:
-            tail = ('<div class="read" style="margin-top:12px;font-size:11.5px">The targets '
-                    'disagree by more than half the share price, so there is no consensus '
-                    'here, only a midpoint between two opposing views.</div>')
-        elif n_an is not None and n_an < 4:
-            tail = ('<div class="read" style="margin-top:12px;font-size:11.5px">Too few '
-                    'analysts follow this for the target to carry weight. A consensus of '
-                    'three is a coincidence.</div>')
+        if n_an is not None and n_an < 4:
+            tail = ('<div class="read" style="margin-top:12px;font-size:11.5px">Only '
+                    f'{n_an} analyst{"s" if n_an != 1 else ""} cover this, too few for the '
+                    'average target to carry much weight.</div>')
+        elif lo and hi and ypx and (hi - lo) / ypx > 0.5:
+            tail = ('<div class="read" style="margin-top:12px;font-size:11.5px">The highest '
+                    'and lowest targets are more than half the share price apart, so the '
+                    'average hides a real disagreement.</div>')
         rail(f'<div class="card"><span class="src y">Yahoo</span><h2>The analyst view</h2>'
                  f'<div class="sub">{n_an or 0} analysts covering</div>{kv}{tail}</div>')
 
@@ -1304,20 +1429,21 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         extra_note = ''
         if sp and sp > 0.08:
             extra_note = (f'<div class="read" style="margin-top:12px;font-size:11.5px">Short '
-                          f'interest of <b>{f(sp*100, "pct")} of float</b> is high. Someone '
-                          f'has done work that reaches the opposite conclusion.</div>')
+                          f'interest of <b>{f(sp*100, "pct")} of float</b> is high: a '
+                          f'meaningful number of investors are betting on a fall, and their '
+                          f'reasons are worth reading.</div>')
         inst = info.get('heldPercentInstitutions')
         say = []
         if inst is not None:
             say.append(
-                'The register is already full of institutions, so the next buyer has to come '
-                'from somewhere else' if inst > 0.8 else
-                'Institutions hold a normal share, leaving room for new money' if inst > 0.4
-                else 'Thinly held by institutions, which cuts both ways on liquidity')
+                'Institutions already hold most of the shares, so fresh demand has to come '
+                'from outside that base' if inst > 0.8 else
+                'Institutions hold a normal share of the register' if inst > 0.4
+                else 'Lightly held by institutions, which can mean less research coverage '
+                'and thinner trading')
         if sp is not None:
-            say.append('and there is a real short case worth reading before acting'
-                       if sp > 0.08 else
-                       'and the bears are not making much of a case' if sp < 0.03 else
+            say.append('and short interest is high' if sp > 0.08 else
+                       'and short interest is low' if sp < 0.03 else
                        'and short interest is unremarkable')
         concl = note(sentence(say)) if say else ''
         rail(f'<div class="card"><span class="src y">Yahoo</span><h2>Positioning</h2>'
@@ -1375,14 +1501,16 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         return f'<div class="vcol {cls}"><h3>{title}</h3><ul>{lis}</ul></div>'
     lede_html = f'<div class="lede">{esc(lede)}</div>' if lede else ''
     H.append(
-        f'<div class="view"><span class="src">Author\'s reading</span>'
+        f'<div class="view"><span class="src">Drawn from the figures above</span>'
         f'<h2>Where the numbers point</h2>{lede_html}'
         f'<div class="vcols">'
         + col('s', 'Supported by the data', supports)
         + col('c', 'Cuts against it', against)
         + col('v', 'Verify before acting', verify)
-        + '</div><div class="disc"><b>The author\'s own reading, for internal research.</b> '
-          'Not investment advice, not a recommendation, and it takes no account of any '
+        + '</div><div class="disc"><b>For internal research.</b> The three columns are '
+          'generated from the figures on this page; the paragraph above them, where there is '
+          'one, is the analyst\'s own note. Not investment advice, not a recommendation, and '
+          'it takes no account of any '
           'person\'s objectives or circumstances. Figures come from third party sources, '
           'believed reliable but not independently verified.</div></div>')
 
@@ -1407,103 +1535,156 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
 def assessment(tv, stats, forensics, risk, dupont_rows, qoe_rows, capital, per_share, info):
     """Three lists built mechanically from the figures on the page.
 
-    Every line traces to a number shown above it. Nothing here is a judgement about what to
-    do, which is why the paragraph above it is left for a person to write.
+    Every line traces to a number shown above it, and each one only fires when the data
+    behind it is present and the comparison is meaningful (no P/E on a loss, no Altman for a
+    bank). Nothing here is a judgement about what to do, which is why the paragraph above it
+    is left for a person to write. Up to four lines per column, strongest first.
     """
     s, c, v = [], [], []
+    gics = tv.get('gics')
+    financial = gics in ('Financials', 'Real Estate')
 
-    better, total = peer_summary(tv, stats)
-    if total:
-        if better >= total - 1:
-            s.append(f'{better} of {total} compared ratios sit on the better side of the '
-                     f'sector median.')
-        elif better <= 1:
-            c.append(f'Only {better} of {total} compared ratios beat the sector median.')
+    # ---- against the sector
+    good, bad = peer_summary(tv, stats, detail=True)
+    total = len(good) + len(bad)
+    if total >= 3:
+        if len(bad) <= 1 and len(good) >= 3:
+            s.append(f'On the favourable side of the {gics or "sector"} median on '
+                     f'{len(good)} of {total} measures compared.')
+        elif len(good) <= 1:
+            c.append(f'On the weaker side of the {gics or "sector"} median on {len(bad)} of '
+                     f'{total} measures compared.')
 
+    # ---- how the return is earned
     if dupont_rows:
         last = dupont_rows[-1]
-        if last['net_margin_pct'] >= 10 and last['equity_multiplier'] < 2.5:
-            s.append(f'Return on equity of {f(last["roe_pct"], "pct")} earned on margin, not '
-                     f'leverage. Equity multiplier {f(last["equity_multiplier"])}.')
-        elif last['equity_multiplier'] >= 3:
-            c.append(f'Equity multiplier of {f(last["equity_multiplier"])} means the return '
-                     f'leans on the balance sheet.')
+        if last['net_margin_pct'] <= 0:
+            c.append(f'The latest reported year ({last["period"]}) was a loss.')
+        elif last['net_margin_pct'] >= 10 and last['equity_multiplier'] < 2.5:
+            s.append(f'Return on equity of {f(last["roe_pct"], "pct")} comes from a '
+                     f'{f(last["net_margin_pct"], "pct")} net margin rather than borrowing; '
+                     f'assets are {f(last["equity_multiplier"])} times equity.')
+        elif last['equity_multiplier'] >= 3 and not financial:
+            c.append(f'Assets are {f(last["equity_multiplier"])} times equity, so the return '
+                     f'on equity relies on leverage.')
 
-    usable = [r['cfo_to_ni'] for r in (qoe_rows or []) if r.get('cfo_to_ni') is not None]
-    if usable:
-        avg = sum(usable) / len(usable)
+    # ---- cash
+    usable = [r for r in (qoe_rows or []) if r.get('cfo_to_ni') is not None]
+    if len(usable) >= 2 and not financial:
+        avg = sum(r['cfo_to_ni'] for r in usable) / len(usable)
         if avg >= 1.1:
-            s.append(f'Cash conversion averages {f(avg, "x")} of reported profit over '
+            s.append(f'Operating cash flow averaged {f(avg, "x")} reported profit across '
+                     f'{len(usable)} profitable years.')
+        elif avg < 0.8:
+            c.append(f'Operating cash flow averaged only {f(avg, "x")} reported profit across '
                      f'{len(usable)} years.')
-        elif avg < 0.9:
-            c.append(f'Cash conversion averages only {f(avg, "x")} of reported profit. '
-                     f'Profit is running ahead of cash.')
-            v.append('Why profit exceeds cash flow, line by line, before anything else.')
+            v.append('Why reported profit is running ahead of cash: receivables, inventory '
+                     'or capitalised costs.')
 
+    # ---- balance sheet
     de, cover = tv.get('debt_equity'), tv.get('interest_cover')
-    if de is not None and de < 0.5 and (cover or 0) > 5:
-        s.append(f'Debt to equity {f(de, "x")} with interest cover {f(cover, "x")}. Little '
-                 f'refinancing risk.')
-    elif de is not None and de > 2:
-        c.append(f'Debt to equity {f(de, "x")}, so the balance sheet carries real leverage.')
-        v.append('The maturity profile of that debt and the cost of refinancing it.')
+    if not financial:
+        if de is not None and de < 0.5 and cover is not None and cover > 8:
+            s.append(f'Debt to equity of {f(de, "x")} and interest cover of {f(cover, "x")}: '
+                     f'little refinancing risk.')
+        elif de is not None and de > 2:
+            c.append(f'Debt to equity of {f(de, "x")}, a heavily geared balance sheet.')
+            v.append('When the debt matures and what refinancing it would cost at today\'s '
+                     'rates.')
+        elif cover is not None and 0 < cover < 2.5:
+            c.append(f'Interest cover of {f(cover, "x")}: profit covers interest only thinly.')
 
+    # ---- forensic scores
     z, pf = tv.get('altman_z'), tv.get('piotroski_f')
     bm = ((forensics or {}).get('beneish') or {}).get('score')
-    if z is not None and z > 3 and (pf or 0) >= 7 and bm is not None and bm < -1.78:
-        s.append(f'Altman {f(z)}, Piotroski {pf:,.0f} of 9 and a clean Beneish all agree.')
+    if not financial and z is not None and z > 3 and pf is not None and pf >= 7 \
+            and bm is not None and bm < -1.78:
+        s.append(f'Altman Z of {f(z)}, Piotroski {pf:,.0f} of 9 and a clean Beneish score '
+                 f'point the same way.')
+    elif pf is not None and pf >= 8:
+        s.append(f'Piotroski score of {pf:,.0f} of 9: fundamentals improved on almost every '
+                 f'test.')
     if bm is not None and bm > -1.78:
-        c.append(f'Beneish M of {minus(f(bm))} sits above the {minus("-1.78")} threshold.')
-        v.append('Which Beneish component is driving the flag, receivables or accruals.')
-    if z is not None and z < 1.8 and tv.get('gics') not in ('Financials', 'Real Estate'):
-        c.append(f'Altman Z of {f(z)} is inside the distress band.')
+        c.append(f'Beneish M-score of {minus(f(bm))} is above the {minus("-1.78")} line that '
+                 f'flags possible earnings manipulation.')
+        v.append('Which Beneish inputs trigger the flag, usually receivables growth or '
+                 'accruals.')
+    if not financial and z is not None and z < 1.8:
+        c.append(f'Altman Z of {f(z)} is in the distress zone.')
+    if pf is not None and pf <= 3:
+        c.append(f'Piotroski score of {pf:,.0f} of 9: fundamentals weakened on most tests.')
 
-    if capital and capital.get('uses') and capital.get('cumulative_cfo'):
+    # ---- capital returned
+    if capital and capital.get('uses') and capital.get('cumulative_cfo') and \
+            capital['cumulative_cfo'] > 0:
         capex = next((u for u in capital['uses'] if 'Capital' in u['use']), None)
-        returns = sum(u['amount'] for u in capital['uses']
-                      if u['use'] in ('Share buybacks', 'Dividends paid'))
+        returned = sum(u['amount'] for u in capital['uses']
+                       if u['use'] in ('Share buybacks', 'Dividends paid'))
         if capex and (capex.get('pct_of_cfo') or 0) > 70:
-            c.append(f'{f(capex["pct_of_cfo"], "pct")} of operating cash flow went into '
-                     f'capital expenditure.')
-            v.append('Utilisation and pricing on the capacity that spending bought.')
-        if returns and capital['cumulative_cfo']:
-            share = returns / capital['cumulative_cfo'] * 100
-            if share > 40:
-                s.append(f'{f(share, "pct")} of operating cash flow returned to holders '
-                         f'through buybacks and dividends.')
+            c.append(f'Capital spending absorbed {f(capex["pct_of_cfo"], "pct")} of operating '
+                     f'cash flow over {capital.get("years")} years.')
+            v.append('What that capital spending is expected to earn, and when.')
+        share = returned / capital['cumulative_cfo'] * 100
+        if share > 40:
+            s.append(f'{f(share, "pct")} of operating cash flow went back to shareholders '
+                     f'through buybacks and dividends.')
 
+    # ---- per share
     if per_share:
         sc = per_share.get('share_count_cagr_pct')
         gap = None
-        if per_share.get('revenue_cagr_pct') is not None and                 per_share.get('revenue_per_share_cagr_pct') is not None:
+        if per_share.get('revenue_cagr_pct') is not None and \
+                per_share.get('revenue_per_share_cagr_pct') is not None:
             gap = per_share['revenue_cagr_pct'] - per_share['revenue_per_share_cagr_pct']
         if gap is not None and gap > 2:
-            c.append(f'Revenue grew {f(gap, "pct")} a year faster than revenue per share. '
-                     f'That gap is dilution.')
+            c.append(f'New shares diluted holders: revenue per share grew {f(gap, "pct")} a '
+                     f'year slower than revenue.')
         elif sc is not None and sc < -1:
-            s.append(f'Share count falling {f(abs(sc), "pct")} a year, so per share growth '
-                     f'runs ahead of absolute growth.')
+            s.append(f'Share count falling {f(abs(sc), "pct")} a year, lifting per share '
+                     f'growth above headline growth.')
 
-    dd = risk.get('max_drawdown_pct')
-    if dd is not None and dd < -50:
-        v.append(f'The {minus(f(dd, "pct"))} fall in the price record. The same business was '
-                 f'priced very differently once.')
-    lo52, hi52, price = info.get('fiftyTwoWeekLow'), info.get('fiftyTwoWeekHigh'), tv.get('price')
-    if lo52 and hi52 and price and hi52 > lo52:
-        pos = (price - lo52) / (hi52 - lo52) * 100
-        if pos > 85:
-            c.append(f'Trading at {f(pos, "pct")} of its 52 week range.')
-        elif pos < 15:
-            v.append(f'Why it sits at {f(pos, "pct")} of its 52 week range when the ratios '
-                     f'read well.')
+    # ---- price and market risk
+    ddf = (risk or {}).get('dd_full') or {}
+    if ddf.get('worst_pct') is not None and ddf['worst_pct'] < -40 and \
+            ddf.get('recovered') is None and hasattr(ddf.get('peak'), 'strftime'):
+        v.append(f'The price is still {abs(ddf.get("now_below_high_pct") or 0):.0f}% below its '
+                 f'{ddf["peak"].strftime("%b %Y")} high. What changed since then, and whether '
+                 f'it has been put right.')
+    beta, corr = (risk or {}).get('beta_2y'), (risk or {}).get('corr_2y')
+    if beta is not None and corr is not None and corr >= 0.4:
+        if beta >= 1.4:
+            c.append(f'Two year beta of {beta:.2f} against the S&P 500: it has amplified '
+                     f'market moves, so a broad sell-off would likely hit it harder.')
+        elif beta <= 0.6:
+            s.append(f'Two year beta of {beta:.2f} against the S&P 500: it has moved less '
+                     f'than the market.')
+    w1 = ((risk or {}).get('windows') or {}).get('1Y') or {}
+    rel = w1.get('relative_pts')
+    if rel is not None and rel < -25:
+        v.append(f'Why the price trailed the S&P 500 by {abs(rel):.0f} percentage points over '
+                 f'the last year when the ratios look as they do.')
+
+    lo52, hi52 = info.get('fiftyTwoWeekLow'), info.get('fiftyTwoWeekHigh')
+    ypx = _yahoo_price(info, tv)
+    if lo52 and hi52 and ypx and hi52 > lo52:
+        pos = (ypx - lo52) / (hi52 - lo52) * 100
+        if pos > 90:
+            v.append('Near the top of its 52 week range, so the entry price matters more than '
+                     'usual.')
     sp = info.get('shortPercentOfFloat')
     if sp and sp > 0.08:
-        c.append(f'Short interest {f(sp*100, "pct")} of float. Somebody informed disagrees.')
-    lo, hi = info.get('targetLowPrice'), info.get('targetHighPrice')
-    if lo and hi and price and (hi - lo) / price > 0.5:
-        c.append(f'Analyst targets span {f(lo)} to {f(hi)}. There is no consensus, only a '
-                 f'midpoint.')
+        c.append(f'Short interest of {f(sp*100, "pct")} of float: a sizeable group expects '
+                 f'the price to fall.')
+        v.append('The short sellers\' argument, if any of them have published it.')
 
-    v.append('Whether the current margin is contracted or spot, since neither this page nor '
-             'the screen can tell.')
-    return s[:4], c[:4], v[:4]
+    v.append('The latest quarterly results and management guidance, which this page does not '
+             'carry.')
+    # de-duplicate while keeping order, then cap each column
+    def top(xs):
+        seen, out = set(), []
+        for x in xs:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out[:4]
+    return top(s), top(c), top(v)
