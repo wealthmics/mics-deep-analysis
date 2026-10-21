@@ -450,6 +450,8 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
                            full_ma200.reindex(win.index), windows.get(lab) or {}))
         close, ma50, ma200 = next((c, a, b) for lab, c, a, b, _ in charts if lab == span_label)
         risk['dd_full'] = rk.drawdown(full)
+        import scoring
+        risk['momentum'] = scoring.momentum(full)
     for lab, key in (('1Y', 'beta_1y'), ('2Y', 'beta_2y'), ('5Y', 'beta_5y')):
         b = (windows.get(lab) or {}).get('bench') or {}
         risk[key] = b.get('beta')
@@ -494,6 +496,10 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
               'body{margin:0;background:#e7ecf3;padding:16px}'
               '@media print{body{background:#fff;padding:0}}</style></head><body>'
               + html + '</body></html>')
+    ctx['show_opinion'] = st.checkbox(
+        'Include the Buy, Hold or Sell opinion in the Excel and PowerPoint files',
+        value=False, help='Off by default: a rating sent to a client can count as an investment '
+                          'recommendation. The scores and pillars are always included.')
     stem = f'MICS_{re.sub(r"[^A-Za-z0-9]+", "-", str(ticker)).strip("-")}_analysis_' \
            f'{datetime.date.today():%Y-%m-%d}'
     c1, c2, c3 = st.columns(3)
