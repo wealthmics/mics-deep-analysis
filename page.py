@@ -789,7 +789,7 @@ def _sector_reading(tv, stats):
 
 
 # ------------------------------------------------------------------ the page ------------
-def _window_table(st, ccy, bench_ok):
+def _window_table(st, ccy, bench_ok, noun='the stock'):
     """The figures under each chart, measured on the full daily series for that window."""
     import risk as rk
     if not st:
@@ -815,7 +815,7 @@ def _window_table(st, ccy, bench_ok):
     table = ''.join(f'<tr><td class="lab">{a}</td><td class="val num">{v}</td>'
                     f'<td class="lab">{c}</td><td class="val num">{d}</td></tr>'
                     for a, v, c, d in rows)
-    words = [rk.drawdown_sentence(dd), rk.beta_sentence(b, ccy)]
+    words = [rk.drawdown_sentence(dd), rk.beta_sentence(b, ccy, noun)]
     if rel is not None and b.get('bench_change_pct') is not None:
         lead = ('ahead of' if rel > 0 else 'behind')
         if abs(rel) >= 1:
@@ -842,7 +842,8 @@ def span_panels(charts, current, risk):
         panels.append(f'<div class="spanpanel sp-{lab}{" on" if on else ""}">'
                       + chart_frame(close, lab, svg_price(close, ma50, ma200),
                                     svg_drawdown(close))
-                      + _window_table(st, ccy, bench_ok) + '</div>')
+                      + _window_table(st, ccy, bench_ok, (risk or {}).get('noun', 'the stock'))
+                      + '</div>')
     return (f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
             f'{"".join(panels)}</div>')
 
