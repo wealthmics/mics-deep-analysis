@@ -42,6 +42,9 @@ capped on its own below instead of capping the whole page. */
 .an{font:14px/1.45 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a1a1a;
 max-width:none;margin:0}
 .an .num{font-variant-numeric:tabular-nums}
+.an .clegend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:#1f3864;margin:4px 0 8px}
+.an .clegend span{display:inline-flex;align-items:center;gap:7px}
+.an .clegend i{display:inline-block;width:22px;height:2px}
 .an .mast{background:#fff;border:1px solid #d8dee9;border-radius:8px;padding:22px 26px;
 display:flex;justify-content:space-between;align-items:flex-start;gap:28px}
 .an .eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
@@ -288,6 +291,18 @@ border-radius:8px;padding:22px 24px 24px;margin-top:14px}
 .an .view .lede{font-size:13px;font-weight:500;line-height:1.65;margin:12px 0 0}
 .an .view .lede b{font-weight:700}
 .an .vcols{display:flex;flex-wrap:wrap;margin:22px -8px 0}
+.an .vhead{display:flex;align-items:center;gap:22px;flex-wrap:wrap;margin:16px 0 6px}
+.an .vop{font-size:26px;font-weight:750;padding:6px 18px;border-radius:8px;letter-spacing:-.01em}
+.an .vop.buy{background:#e3f1e8;color:#1e6b3b}.an .vop.hold{background:#eef2f8;color:#1f3864}
+.an .vop.sell{background:#f7e4e4;color:#a12a2a}.an .vop.na{background:#f1f3f7;color:#2e4a7d;font-size:18px}
+.an .vsc b{font-size:30px;font-weight:750;color:#1f3864}.an .vsc span{margin-left:6px;font-size:13px;color:#2e4a7d}
+.an .vexp{font-size:12.5px;color:#2e4a7d;max-width:420px}
+.an .vflag{background:#fbf0d6;border-left:3px solid #bf8f00;padding:9px 12px;border-radius:4px;font-size:12.5px;margin:10px 0}
+.an .vtab{margin-top:10px}.an .vtab td{padding:9px 8px;vertical-align:middle;border-bottom:1px solid #e9edf3}
+.an .vtab td.lab{font-weight:650;color:#1f3864;width:170px}.an .vtab td.lab small{display:block;font-weight:500;font-size:11px;color:#2e4a7d}
+.an .vtab td.num{width:44px;text-align:right;font-size:15px}.an .vtab td.barcell{width:150px}
+.an .vbar{height:7px;background:#e9edf3;border-radius:4px;overflow:hidden}.an .vbar i{display:block;height:100%;background:#1f3864}
+.an .vtab td.why{font-size:12.5px;line-height:1.5;text-align:left}
 .an .vcols>.vcol{flex:1 1 0;min-width:210px;margin:0 8px 16px}
 @media(max-width:940px){.an .vcols>.vcol{flex-basis:47%;min-width:47%}}
 .an .vcol{border:1px solid #d8dee9;border-radius:6px;padding:15px 17px 17px;background:#f4f7fb}
@@ -467,6 +482,13 @@ def _points(values, width, height, pad_top=6, pad_bottom=6):
     return ' '.join(pts), lo, hi
 
 
+MA50_COLOUR, MA200_COLOUR = '#bf8f00', '#6f86ad'
+LEGEND = ('<div class="clegend"><span><i style="background:#1f3864;height:3px"></i>Close</span>'
+          '<span><i style="background:#bf8f00"></i>50 day average</span>'
+          '<span><i style="background:repeating-linear-gradient(90deg,#6f86ad 0 6px,transparent 6px 10px)">'
+          '</i>200 day average</span></div>')
+
+
 def svg_price(close, ma50, ma200, width=720, height=250):
     """Close with its two moving averages, and a hover readout at every point.
 
@@ -495,11 +517,12 @@ def svg_price(close, ma50, ma200, width=720, height=250):
                for i, v in enumerate(vals) if v is not None and not pd.isna(v)]
         if len(pts) > 1:
             d = f' stroke-dasharray="{dash}"' if dash else ''
-            parts.append(f'<polyline fill="none" stroke="{colour}" stroke-width="1.3"'
+            parts.append(f'<polyline fill="none" stroke="{colour}" stroke-width="1.6"'
                          f'{d} points="{" ".join(pts)}"/>')
 
-    overlay(ma50, '#8fa3bf')
-    overlay(ma200, '#b9c4d4', '4,3')
+    # the 50 day is gold and solid, the 200 day blue-grey and dashed, matching the legend
+    overlay(ma200, MA200_COLOUR, '6,4')
+    overlay(ma50, MA50_COLOUR)
     parts.append(f'<polyline fill="none" stroke="{NAVY}" stroke-width="2" points="{body}"/>')
 
     idx = list(close.index)
@@ -517,13 +540,13 @@ def svg_price(close, ma50, ma200, width=720, height=250):
             label = when.strftime('%d %b %Y') if hasattr(when, 'strftime') else str(when)
             lines = [label, f'Close {v:,.2f}']
             if i < len(ma50_list) and ma50_list[i] is not None and not pd.isna(ma50_list[i]):
-                lines.append(f'50 day {ma50_list[i]:,.2f}')
+                lines.append(f'50 day average {ma50_list[i]:,.2f}')
             if i < len(ma200_list) and ma200_list[i] is not None and not pd.isna(ma200_list[i]):
-                lines.append(f'200 day {ma200_list[i]:,.2f}')
+                lines.append(f'200 day average {ma200_list[i]:,.2f}')
             cx = b * bw + bw / 2
             cy = 6 + (hi - v) / span * usable
             # the box flips to the left near the right edge so it never runs off the chart
-            box_w, box_h = 150, 16 + 13 * len(lines)
+            box_w, box_h = 172, 16 + 13 * len(lines)
             bx = round(cx + 10 if cx < width - box_w - 14 else cx - box_w - 10, 1)
             by = round(min(max(4, cy - box_h / 2), height - box_h - 4), 1)
             text = ''.join(
@@ -638,7 +661,7 @@ def chart_frame(close, span_label, price_svg, dd_svg):
     dd_axis = (f'<span class="hi">0%</span>'
                f'<span class="lo">{worst:,.0f}%</span>')
 
-    return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{price_svg}</div>'
+    return LEGEND + (f'<div class="plot"><div class="yaxis">{yaxis}</div>{price_svg}</div>'
             f'{date_row}'
             f'<div class="ddlabel">Drawdown: how far the price sat below its highest '
             f'level so far in this window</div>'
@@ -1159,6 +1182,9 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         gap = None
         if ps.get('revenue_per_share_cagr_pct') is not None:
             gap = ps['revenue_cagr_pct'] - ps['revenue_per_share_cagr_pct']
+        gap_ni = 'n/a'
+        if ps.get('net_income_cagr_pct') is not None and ps.get('eps_cagr_pct') is not None:
+            gap_ni = minus(f(ps['net_income_cagr_pct'] - ps['eps_cagr_pct'], 'pct'))
         body = (
             f'<tr><td class="lab">Revenue</td>'
             f'<td class="val num">{minus(f(ps["revenue_cagr_pct"], "pct"))}</td>'
@@ -1167,7 +1193,7 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
             f'<tr><td class="lab">Net income</td>'
             f'<td class="val num">{minus(f(ps.get("net_income_cagr_pct"), "pct"))}</td>'
             f'<td class="val num">{minus(f(ps.get("eps_cagr_pct"), "pct"))}</td>'
-            f'<td class="val">per share</td></tr>'
+            f'<td class="val num">{gap_ni}</td></tr>'
             f'<tr><td class="lab">Share count</td>'
             f'<td class="val num">{minus(f(ps.get("share_count_cagr_pct"), "pct"))}</td>'
             f'<td class="val" colspan="2">'
@@ -1494,26 +1520,13 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
     H.append('<div class="grid"><div>' + ''.join(LEFT)
              + '</div><div>' + ''.join(RAIL) + '</div></div>')    # close rail and grid
 
-    # ---------- the reading, last, after the evidence ----------
-    supports, against, verify = assessment(tv, stats, forensics, risk, dupont_rows,
-                                           qoe_rows, capital, per_share, info)
-    def col(cls, title, items):
-        lis = ''.join(f'<li>{x}</li>' for x in items) or '<li>Nothing conclusive.</li>'
-        return f'<div class="vcol {cls}"><h3>{title}</h3><ul>{lis}</ul></div>'
-    lede_html = f'<div class="lede">{esc(lede)}</div>' if lede else ''
-    H.append(
-        f'<div class="view"><span class="src">Drawn from the figures above</span>'
-        f'<h2>Where the numbers point</h2>{lede_html}'
-        f'<div class="vcols">'
-        + col('s', 'Supported by the data', supports)
-        + col('c', 'Cuts against it', against)
-        + col('v', 'Verify before acting', verify)
-        + '</div><div class="disc"><b>For internal research.</b> The three columns are '
-          'generated from the figures on this page; the paragraph above them, where there is '
-          'one, is the analyst\'s own note. Not investment advice, not a recommendation, and '
-          'it takes no account of any '
-          'person\'s objectives or circumstances. Figures come from third party sources, '
-          'believed reliable but not independently verified.</div></div>')
+    # ---------- the verdict, last, after the evidence ----------
+    import scoring
+    sc = scoring.score(tv, stats, forensics=forensics, risk=risk, qoe_rows=qoe_rows,
+                       dupont_rows=dupont_rows, info=info)
+    _, _, verify = assessment(tv, stats, forensics, risk, dupont_rows, qoe_rows, capital,
+                              per_share, info)
+    H.append(verdict_html(sc, verify, lede))
 
     # ---------- sources ----------
     H.append(
@@ -1531,6 +1544,56 @@ def build(tv, isin, yf_data, stats, forensics, resolution, risk, dupont_rows, qo
         f'recommendation.</b></div>')
     H.append('</div>')
     return ''.join(H)
+
+
+def verdict_html(sc, verify, lede=''):
+    """One place where the page comes to a conclusion: opinion, score, the five pillars and
+    what would change the view. Each pillar line names its strongest and weakest figure, so
+    nothing here repeats a card word for word."""
+    op = sc['opinion']
+    tone = {'Buy': 'buy', 'Hold': 'hold', 'Sell': 'sell'}.get(op, 'na')
+    total = '-' if sc['overall'] is None else f'{sc["overall"]}'
+    rows = ''
+    for name, w in sc['weights'].items():
+        pl = sc['pillars'].get(name)
+        if not pl:
+            rows += (f'<tr><td class="lab">{name}<small>{w}% of the score</small></td>'
+                     f'<td class="num">n/a</td><td></td><td class="why">No data for this pillar.</td></tr>')
+            continue
+        s_ = pl['score']
+        worst_score = min(i_['score'] for i_ in pl['items'])
+        why = esc(pl['best'].rstrip('.')) + ('.' if (pl['best'] == pl['worst'] or worst_score >= 50) else
+                                 f'. Weakest: {esc(pl["worst"][0].lower() + pl["worst"][1:]).rstrip(".")}.')
+        rows += (f'<tr><td class="lab">{name}<small>{w}% of the score</small></td>'
+                 f'<td class="num"><b>{s_}</b></td>'
+                 f'<td class="barcell"><div class="vbar"><i style="width:{s_}%"></i></div></td>'
+                 f'<td class="why">{why}</td></tr>')
+    lis = lambda xs: ''.join(f'<li>{esc(x.rstrip("."))}.</li>' for x in xs) or '<li>Nothing stands out.</li>'
+    flags = ''
+    if sc['flags']:
+        flags = ('<div class="vflag"><b>Red flags' + (', so the opinion is capped at Hold'
+                 if sc['capped'] else '') + ':</b> ' + '; '.join(esc(x) for x in sc['flags']) + '.</div>')
+    lede_html = f'<div class="lede">{esc(lede)}</div>' if lede else ''
+    return (
+        f'<div class="view"><span class="src">Scored against the sector</span>'
+        f'<h2>Verdict</h2>{lede_html}'
+        f'<div class="vhead"><div class="vop {tone}">{esc(op)}</div>'
+        f'<div class="vsc"><b>{total}</b><span>of 100</span></div>'
+        f'<div class="vexp">Buy from {BUY_AT_TXT}, Hold from {SELL_TXT}, Sell below. '
+        f'{sc["coverage"]}% of the expected figures were available.</div></div>'
+        f'{flags}<table class="vtab"><tbody>{rows}</tbody></table>'
+        f'<div class="vcols"><div class="vcol s"><h3>Lifting the score</h3><ul>{lis(sc["lifts"])}</ul></div>'
+        f'<div class="vcol c"><h3>Holding it back</h3><ul>{lis(sc["drags"])}</ul></div>'
+        f'<div class="vcol v"><h3>Check before acting</h3><ul>'
+        + ''.join(f'<li>{x}</li>' for x in verify[:3]) + '</ul></div></div>'
+        f'<div class="disc"><b>A mechanical rating, for internal research.</b> Each figure is '
+        f'scored against its own sector, the scores roll up into five weighted pillars, and the '
+        f'total sets the opinion. It reads only the figures on this page, so it knows nothing of '
+        f'news, guidance or price targets beyond those shown. Not investment advice and not a '
+        f'recommendation to any person.</div></div>')
+
+
+BUY_AT_TXT, SELL_TXT = '70', '45'
 
 
 def assessment(tv, stats, forensics, risk, dupont_rows, qoe_rows, capital, per_share, info):
