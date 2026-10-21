@@ -179,7 +179,7 @@ def valuation_rows(ctx):
     return rows
 
 
-def rebased(ctx, years=5):
+def rebased(ctx, years=5, freq='W-FRI'):
     """Weekly closes for the stock and the S&P 500, both rebased to 100."""
     hist = ctx.get('hist')
     if hist is None or 'Close' not in hist:
@@ -188,11 +188,11 @@ def rebased(ctx, years=5):
     if a is None or len(a) < 30:
         return None
     a = a.loc[a.index[-1] - pd.DateOffset(years=years):]
-    a = a.resample('W-FRI').last().dropna()
+    a = a.resample(freq).last().dropna()
     out = pd.DataFrame({'stock': a / a.iloc[0] * 100})
     b = rk.dated(ctx.get('bench')) if ctx.get('bench') is not None else None
     if b is not None:
-        b = b.loc[a.index[0] - pd.Timedelta(days=7):a.index[-1]].resample('W-FRI').last()
+        b = b.loc[a.index[0] - pd.Timedelta(days=40):a.index[-1]].resample(freq).last()
         b = b.reindex(out.index).ffill()
         if b.notna().sum() > 10:
             first = b.dropna().iloc[0]
@@ -612,13 +612,13 @@ def build_pptx(ctx):
         table(s, X0, 1.75, [2.8, 1.6, 1.7, 1.6, 1.7, 2.73], rows,
               size=10.5 if rh >= 0.3 else 9.5, rowh=rh, aligns=['l', 'r', 'r', 'r', 'r', 'l'])
 
-    # 4. price against the S&P 500
-    rb = rebased(ctx)
+    # 4. price against the S&P 500, month end points so the date axis stays readable
+    rb = rebased(ctx, freq='ME')
     wr = window_rows(ctx)
     if rb is not None and len(rb) > 10:
         yrs = max(1, round((rb.index[-1] - rb.index[0]).days / 365.25))
         s = content(f'Price against the S&P 500 over {yrs} year{"s" if yrs > 1 else ""}',
-                    'Weekly closes, both rebased to 100 at the start')
+                    'Month end closes, both rebased to 100 at the start')
         cd = CategoryChartData()
         cd.categories = [d.date() for d in rb.index]
         cd.add_series(tv.get('ticker') or 'Stock', [None if pd.isna(x) else round(float(x), 2)
