@@ -491,3 +491,53 @@ def get_price_history(symbol: str, max_age_hours: float = 12) -> "pd.DataFrame |
         except Exception:
             return None
     return None
+
+
+# ----------------------------------------------------------------- fund profile ---------
+def get_fund_profile(symbol: str, max_age_hours: float = 12) -> dict:
+    """What Yahoo knows about an ETF: its info block, top holdings and sector weights.
+
+    Every piece is fetched on its own and may be missing; the caller shows what arrived.
+    Returns {'info': {}, 'top_holdings': DataFrame|None, 'sectors': {}, 'equity': DataFrame|None,
+    'description': str|None, 'error': str|None}.
+    """
+    safe = re.sub(r"[^A-Za-z0-9]", "_", symbol)
+    path = os.path.join(CACHE_DIR, f"fund_{safe}.pkl")
+    try:
+        if os.path.exists(path) and (time.time() - os.path.getmtime(path)) < max_age_hours * 3600:
+            with open(path, "rb") as fh:
+                return pickle.load(fh)
+    except Exception:
+        pass
+    out = {"info": {}, "top_holdings": None, "sectors": {}, "equity": None,
+           "description": None, "error": None}
+    try:
+        t = yf.Ticker(symbol)
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+    try:
+        out["info"] = t.info or {}
+    except Exception as e:
+        out["error"] = f"info: {e}"
+    try:
+        fd = t.funds_data
+        for attr, key in (("top_holdings", "top_holdings"), ("equity_holdings", "equity"),
+                          ("description", "description")):
+            try:
+                out[key] = getattr(fd, attr)
+            except Exception:
+                pass
+        try:
+            out["sectors"] = dict(fd.sector_weightings or {})
+        except Exception:
+            pass
+    except Exception:
+        pass
+    if out["info"] or out["top_holdings"] is not None:
+        try:
+            with open(path, "wb") as fh:
+                pickle.dump(out, fh)
+        except Exception:
+            pass
+    return out
