@@ -261,7 +261,19 @@ def score(tv, stats, info, risk, qoe_rows, forensics, dupont_rows):
 
     every = [(a, b) for xs in items.values() for a, b in xs]
     lifts = [b for a, b in sorted(every, key=lambda x: -x[0]) if a >= 65][:3]
-    drags = [b for a, b in sorted(every, key=lambda x: x[0]) if a <= 35][:3]
+    # Holding it back: the clear weaknesses first (bottom third of the sector), then the
+    # softer ones (below the sector median), so a strong company still shows where it is
+    # weakest. Only when nothing is below the median does it say so, naming the weakest reading.
+    ranked = sorted(every, key=lambda x: x[0])
+    drags = [b for a, b in ranked if a <= 35][:3]
+    drags += [b for a, b in ranked if 35 < a < 50][:3 - len(drags)]
+    if coverage < 0.75 and len(drags) < 3:
+        drags.append(f'Only {round(coverage * 100)}% of the expected figures were available, '
+                     f'so the score rests on a partial picture')
+    if not drags and ranked:
+        a, b = ranked[0]
+        drags = [f'Nothing is below its sector median. The weakest reading: '
+                 f'{b[0].lower() + b[1:]}']
     return {'overall': overall, 'opinion': opinion, 'capped': capped, 'flags': flags,
             'pillars': pillars, 'weights': WEIGHTS, 'coverage': round(coverage * 100),
             'lifts': lifts, 'drags': drags, 'momentum': mo}
