@@ -1,0 +1,354 @@
+"""
+Stock cycle for one company, computed from its daily price history.
+
+One rule, applied the same way to the past and to today, so the history and the current
+reading can never disagree and a confirmed turning point never moves when new prices
+arrive:
+
+    A bull phase ends when the price closes at least the threshold below the highest close
+    since the last trough. That high is then a confirmed peak.
+    A bear phase ends when the price closes at least the threshold above the lowest close
+    since the last peak. That low is then a confirmed trough.
+
+The threshold is the stock's own typical annual volatility, kept between 15% and 35%, so a
+utility and a semiconductor are each measured on their own scale.
+
+Prices are traded prices: adjusted for splits but not for dividends. That keeps every level
+on the page equal to a price that actually printed, so a support zone means what a trader
+would expect it to mean, and every trigger ties out exactly to the high or low it comes
+from. Dividends are added back separately when the holding return is measured.
+
+Kept out of app.py so it can be tested without Streamlit, the same way risk.py is.
+"""
+
+import math
+
+import numpy as np
+import pandas as pd
+
+import risk as rk
+
+THRESHOLD_FLOOR, THRESHOLD_CAP = 0.15, 0.35
+ZONE_BAND = 0.04            # turning points within 4% of each other form one zone
+MIN_DAYS = 504              # two years of trading days before anything is shown
+MIN_CYCLES = 5              # below this many completed phases, averages are flagged as thin
+OUTLIER_Z = 3.5             # robust z score above which a phase counts as extreme
+MARKET_FALL = 0.20          # an S&P 500 fall this deep during a bear phase makes it market-wide
+DAYS_PER_MONTH = 30.4375
+
+
+# ---------------------------------------------------------------- prices -----------------
+def traded_prices(hist):
+    """Split-adjusted closes with the dividend adjustment taken back out.
+
+    Yahoo's adjusted close scales every price before an ex-dividend date by
+    f = 1 - D / (close the day before). Walking the dividends from the latest backwards, the
+    raw close the day before each ex-date is adjusted_close / (later factors) + D, which
+    gives f exactly. Returns (traded closes, dividends per share), both on a plain date index.
+    """
+    close = rk.dated(hist['Close'])
+    if close is None:
+        return None, pd.Series(dtype=float)
+    divs = pd.Series(dtype=float)
+    if 'Dividends' in hist:
+        d = rk.dated(hist['Dividends'])
+        if d is not None:
+            divs = d[d > 0]
+    if divs.empty:
+        return close, divs
+    factor = pd.Series(1.0, index=close.index)
+    later = 1.0
+    for ex in sorted(divs.index, reverse=True):
+        before = close.loc[:ex - pd.Timedelta(days=1)]
+        if before.empty:
+            continue
+        amount = float(divs[ex])
+        raw_prev = float(before.iloc[-1]) / later + amount
+        if raw_prev <= amount:
+            continue                         # a bad dividend record; leave the series alone
+        f = 1 - amount / raw_prev
+        factor[factor.index < ex] *= f
+        later *= f
+    return close / factor, divs
+
+
+def threshold_for(close):
+    """The stock's typical annual volatility, kept between the floor and the cap.
+
+    Measured year by year and the median taken, so one crash year cannot set the scale for
+    the whole history. Years are counted back from the latest close so the most recent one
+    is complete.
+    """
+    r = np.log(close).diff().dropna()
+    years = len(r) // 252
+    if years >= 1:
+        r = r.iloc[len(r) - years * 252:]
+        vols = [float(r.iloc[i * 252:(i + 1) * 252].std()) * math.sqrt(252)
+                for i in range(years)]
+        vol = float(np.median(vols))
+    else:
+        vol = float(r.std()) * math.sqrt(252)
+    return min(THRESHOLD_CAP, max(THRESHOLD_FLOOR, vol)), vol
+
+
+# ---------------------------------------------------------------- the walk ---------------
+def turning_points(close, threshold):
+    """One pass through the closes, oldest first. Nothing after a day is used on that day.
+
+    Returns the confirmed turning points and the state of the open phase. Until the first
+    turn there is no phase at all, because the history begins in the middle of one.
+    """
+    dates, vals = list(close.index), [float(v) for v in close.values]
+    up, down = 1 + threshold, 1 - threshold
+    state, points = None, []
+    hi = lo = vals[0]
+    hi_i = lo_i = 0
+
+    def point(kind, at, i):
+        return {'kind': kind, 'date': dates[at], 'price': vals[at],
+                'confirm_date': dates[i], 'confirm_price': vals[i]}
+
+    for i, v in enumerate(vals):
+        if state is None:
+            if v > hi:
+                hi, hi_i = v, i
+            if v < lo:
+                lo, lo_i = v, i
+            if v <= hi * down:
+                points.append(point('peak', hi_i, i))
+                state, lo, lo_i = 'bear', v, i
+            elif v >= lo * up:
+                points.append(point('trough', lo_i, i))
+                state, hi, hi_i = 'bull', v, i
+        elif state == 'bull':
+            if v > hi:
+                hi, hi_i = v, i
+            elif v <= hi * down:
+                points.append(point('peak', hi_i, i))
+                state, lo, lo_i = 'bear', v, i
+        else:
+            if v < lo:
+                lo, lo_i = v, i
+            elif v >= lo * up:
+                points.append(point('trough', lo_i, i))
+                state, hi, hi_i = 'bull', v, i
+
+    current = {'state': state, 'last_date': dates[-1], 'last_price': vals[-1]}
+    if state == 'bull':
+        current.update(extreme=hi, extreme_date=dates[hi_i], trigger=hi * down)
+    elif state == 'bear':
+        current.update(extreme=lo, extreme_date=dates[lo_i], trigger=lo * up)
+    return points, current
+
+
+def months_between(a, b):
+    return (pd.Timestamp(b) - pd.Timestamp(a)).days / DAYS_PER_MONTH
+
+
+def phases_from(points):
+    """Every completed phase, from one confirmed turning point to the next."""
+    out = []
+    for a, b in zip(points[:-1], points[1:]):
+        out.append({'kind': 'bull' if a['kind'] == 'trough' else 'bear',
+                    'start': a['date'], 'end': b['date'],
+                    'start_price': a['price'], 'end_price': b['price'],
+                    'months': months_between(a['date'], b['date']),
+                    'change': b['price'] / a['price'] - 1,
+                    'extreme': False, 'market': None})
+    return out
+
+
+def dividends_between(divs, after, upto):
+    if divs is None or divs.empty:
+        return 0.0
+    return float(divs[(divs.index > after) & (divs.index <= upto)].sum())
+
+
+def holdings_from(points, divs):
+    """What someone following the rule would actually have held: in on the day a bull phase
+    was confirmed, out on the day the next bear phase was confirmed, at those closes."""
+    out = []
+    for a, b in zip(points[:-1], points[1:]):
+        if a['kind'] != 'trough':
+            continue
+        entry, exit_ = a['confirm_price'], b['confirm_price']
+        paid = dividends_between(divs, a['confirm_date'], b['confirm_date'])
+        out.append({'entry_date': a['confirm_date'], 'exit_date': b['confirm_date'],
+                    'entry': entry, 'exit': exit_, 'dividends': paid,
+                    'months': months_between(a['confirm_date'], b['confirm_date']),
+                    'price_return': exit_ / entry - 1,
+                    'total_return': (exit_ + paid) / entry - 1,
+                    'trough': a['date'], 'extreme': False})
+    return out
+
+
+# ---------------------------------------------------------------- extremes ---------------
+def robust_z(values):
+    """Distance from the median in units of the median absolute deviation, scaled so it
+    reads like an ordinary z score. None when there is too little to judge."""
+    x = np.asarray(values, dtype=float)
+    if len(x) < MIN_CYCLES:
+        return None
+    med = np.median(x)
+    mad = np.median(np.abs(x - med))
+    if mad == 0:
+        return None
+    return 0.6745 * (x - med) / mad
+
+
+def flag_extremes(phases):
+    """Mark phases far outside this stock's normal depth or length, bull and bear judged
+    separately. Prices are never removed; flagged phases are only left out of the medians."""
+    for kind in ('bull', 'bear'):
+        group = [p for p in phases if p['kind'] == kind]
+        z_len = robust_z([math.log(max(p['months'], 0.25)) for p in group])
+        z_size = robust_z([abs(math.log(1 + p['change'])) for p in group])
+        for k, p in enumerate(group):
+            if (z_len is not None and abs(z_len[k]) > OUTLIER_Z) or \
+                    (z_size is not None and abs(z_size[k]) > OUTLIER_Z):
+                p['extreme'] = True
+
+
+def tag_market(phases, bench):
+    """A bear phase is market-wide when the S&P 500 also fell at least 20% inside it."""
+    b = rk.dated(bench) if bench is not None else None
+    if b is None:
+        return
+    for p in phases:
+        if p['kind'] != 'bear':
+            continue
+        w = b.loc[p['start']:p['end']]
+        if len(w) < 5 or w.index[0] - p['start'] > pd.Timedelta(days=10):
+            continue                         # the benchmark does not reach back that far
+        fall = float((w / w.cummax() - 1).min())
+        p['market'] = 'market-wide' if fall <= -MARKET_FALL else 'stock-specific'
+        p['market_fall'] = fall
+
+
+# ---------------------------------------------------------------- statistics -------------
+def describe(values):
+    x = [v for v in values if v is not None and not math.isnan(v)]
+    if not x:
+        return {'n': 0, 'median': None, 'p25': None, 'p75': None}
+    return {'n': len(x), 'median': float(np.median(x)),
+            'p25': float(np.percentile(x, 25)), 'p75': float(np.percentile(x, 75))}
+
+
+def typical(phases, holdings, exclude_extremes):
+    keep = [p for p in phases if not (exclude_extremes and p['extreme'])]
+    hold = [h for h in holdings if not (exclude_extremes and h['extreme'])]
+    bull = [p for p in keep if p['kind'] == 'bull']
+    bear = [p for p in keep if p['kind'] == 'bear']
+    return {'bull_months': describe([p['months'] for p in bull]),
+            'bull_change': describe([p['change'] for p in bull]),
+            'bear_months': describe([p['months'] for p in bear]),
+            'bear_change': describe([p['change'] for p in bear]),
+            'hold_months': describe([h['months'] for h in hold]),
+            'hold_total': describe([h['total_return'] for h in hold]),
+            'hold_price': describe([h['price_return'] for h in hold]),
+            'hold_won': (sum(1 for h in hold if h['total_return'] > 0), len(hold))}
+
+
+# ---------------------------------------------------------------- support / resistance ---
+def zones_from(points, phases, current):
+    """Turning point prices grouped into zones no wider than ZONE_BAND.
+
+    A peak and a trough at the same level share a zone, because a level that capped the price
+    once and later held it up is the same level. Every turning point inside a zone counts as
+    the zone holding. A later phase that ran straight through the zone, starting on one side
+    and ending on the other, counts as the zone breaking.
+    """
+    if not points:
+        return []
+    ordered = sorted(points, key=lambda p: p['price'])
+    groups, cur = [], [ordered[0]]
+    for p in ordered[1:]:
+        if p['price'] <= cur[0]['price'] * (1 + ZONE_BAND):
+            cur.append(p)
+        else:
+            groups.append(cur)
+            cur = [p]
+    groups.append(cur)
+
+    moves = [(p['start'], p['start_price'], p['end_price']) for p in phases]
+    if points and current.get('state'):
+        moves.append((points[-1]['date'], points[-1]['price'], current['last_price']))
+
+    zones = []
+    for g in groups:
+        low, high = g[0]['price'], g[-1]['price']
+        first = min(p['date'] for p in g)
+        breaks = sum(1 for start, a, b in moves
+                     if start >= first and min(a, b) < low and max(a, b) > high)
+        zones.append({'low': low, 'high': high,
+                      'troughs': sum(1 for p in g if p['kind'] == 'trough'),
+                      'peaks': sum(1 for p in g if p['kind'] == 'peak'),
+                      'holds': len(g), 'breaks': breaks,
+                      'last': max(p['date'] for p in g)})
+    return zones
+
+
+def nearest_zones(zones, price):
+    below = [z for z in zones if z['high'] < price]
+    above = [z for z in zones if z['low'] > price]
+    inside = [z for z in zones if z['low'] <= price <= z['high']]
+    return (max(below, key=lambda z: z['high']) if below else None,
+            min(above, key=lambda z: z['low']) if above else None,
+            inside[0] if inside else None)
+
+
+# ---------------------------------------------------------------- everything -------------
+def analyse(hist, bench=None, threshold=None):
+    """The whole cycle reading for one stock. Every figure on the page comes from here.
+
+    hist       Yahoo daily history with Close and, if available, Dividends
+    bench      S&P 500 closes, for tagging market-wide bear phases; optional
+    threshold  fixed threshold for tests; normally worked out from the stock itself
+    """
+    if hist is None or 'Close' not in hist:
+        return {'error': 'No price history arrived from Yahoo.'}
+    close, divs = traded_prices(hist)
+    if close is None or len(close) < MIN_DAYS:
+        n = 0 if close is None else len(close)
+        return {'error': f'Only {n} trading days of history. The cycle needs at least two '
+                         f'years before it can say anything.'}
+
+    vol = None
+    if threshold is None:
+        threshold, vol = threshold_for(close)
+    points, current = turning_points(close, threshold)
+    phases = phases_from(points)
+    holdings = holdings_from(points, divs)
+    flag_extremes(phases)
+    extreme_troughs = {p['start'] for p in phases if p['kind'] == 'bull' and p['extreme']}
+    for h in holdings:
+        h['extreme'] = h['trough'] in extreme_troughs
+    tag_market(phases, bench)
+
+    # the open phase, from the last confirmed turn to the latest close
+    if points:
+        last = points[-1]
+        current['start'] = last['date']
+        current['start_price'] = last['price']
+        current['confirm_date'] = last['confirm_date']
+        current['confirm_price'] = last['confirm_price']
+        current['months'] = months_between(last['date'], current['last_date'])
+        current['change'] = current['last_price'] / last['price'] - 1
+        current['from_extreme'] = current['last_price'] / current['extreme'] - 1
+        current['to_trigger'] = current['trigger'] / current['last_price'] - 1
+        if current['state'] == 'bull':
+            paid = dividends_between(divs, last['confirm_date'], current['last_date'])
+            current['held_months'] = months_between(last['confirm_date'],
+                                                    current['last_date'])
+            current['held_return'] = ((current['last_price'] + paid)
+                                      / last['confirm_price'] - 1)
+
+    zones = zones_from(points, phases, current)
+    support, resistance, inside = nearest_zones(zones, current['last_price'])
+    return {'close': close, 'dividends': divs, 'threshold': threshold, 'vol': vol,
+            'points': points, 'phases': phases, 'holdings': holdings, 'current': current,
+            'all': typical(phases, holdings, False), 'clean': typical(phases, holdings, True),
+            'extremes': sum(1 for p in phases if p['extreme']),
+            'zones': zones, 'support': support, 'resistance': resistance, 'inside': inside,
+            'has_dividends': not divs.empty, 'bench_ok': bench is not None,
+            'first_date': close.index[0], 'last_date': close.index[-1]}
