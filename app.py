@@ -474,12 +474,18 @@ def render(st, tv, isin, yf_data, sector_stats, forensics, resolution=None):
                     span_label, close, ma50, ma200, lede, spans, base_query,
                     percentile_of, charts=charts)
     st.markdown(html, unsafe_allow_html=True)
+    try:
+        comp_key, _ = lookup(load_tv_feed(), isin=isin, ticker=(tv or {}).get('ticker'),
+                             ccy=(tv or {}).get('ccy'))
+    except Exception:
+        comp_key = None
+    competitors_ctx = render_competitors(comp_key, tv or None, sector_stats)
     ctx = {'tv': tv or {}, 'isin': isin, 'info': (yf_data or {}).get('info') or {},
            'stats': stats, 'forensics': forensics, 'risk': risk, 'dupont': dup,
            'qoe_rows': qoe_rows, 'qoe_verdict': qoe_verdict, 'capital': capital,
            'per_share': per_share, 'lede': lede, 'resolution': resolution,
            'hist': hist, 'bench': bench_close, 'spans': spans,
-           'percentile_of': percentile_of}
+           'percentile_of': percentile_of, 'competitors': competitors_ctx}
 
     # the report, as a standalone file. The page is already one block of self contained
     # HTML with print rules, so the download opens and prints to PDF with the layout intact.
@@ -878,15 +884,15 @@ def render_competitors(subject_key, subject, sector_stats):
     import competitors as cp
     st.markdown(pg.section('Competitors', 'the company against the companies it competes with'),
                 unsafe_allow_html=True)
-    if not subject:
+    if not subject or not subject.get('ticker'):
         st.info('This company is not in the TradingView feed, so there is nothing to compare '
                 'it with on the same basis.')
-        return
+        return None
     try:
         feed = load_tv_feed()
     except Exception as e:
         st.warning(f'The feed did not load ({e}), so competitors cannot be listed.')
-        return
+        return None
     stocks = feed.get('stocks') or {}
     ident = subject_key or subject.get('ticker')
     default = cp.auto_peers(feed, subject_key, subject)
@@ -919,11 +925,29 @@ def render_competitors(subject_key, subject, sector_stats):
                        f'writes it, for example 005930.KS or SHEL.L.')
     if not peers:
         st.info('Pick at least one competitor to compare against.')
-        return
+        return None
     sector = {k: v.get('median') for k, v in
               ((sector_stats or {}).get(subject.get('gics')) or {}).items() if isinstance(v, dict)}
-    st.markdown(cp.build(subject_key, subject, peers, sector, feed.get('as_of')),
-                unsafe_allow_html=True)
+    cx = cp.compute(subject_key, subject, peers, sector, feed.get('as_of'))
+    st.markdown(cp.build(cx), unsafe_allow_html=True)
+    stem = (f'MICS_{re.sub(r"[^A-Za-z0-9]+", "-", str(subject.get("ticker"))).strip("-")}'
+            f'_competitors_{datetime.date.today():%Y-%m-%d}')
+    e1, e2, _ = st.columns([1, 1, 2])
+    try:
+        import comp_exports as cxp
+        e1.download_button('Competitors: Excel', cxp.build_xlsx(cx), file_name=stem + '.xlsx',
+                           mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                           use_container_width=True, key='comp_xlsx')
+        e2.download_button('Competitors: PowerPoint', cxp.build_pptx(cx),
+                           file_name=stem + '.pptx',
+                           mime='application/vnd.openxmlformats-officedocument.'
+                                'presentationml.presentation',
+                           use_container_width=True, key='comp_pptx')
+    except Exception as e:                       # an export must never take the page down
+        e1.caption(f'Competitor exports are unavailable: {e}')
+    st.caption('The comparison on its own. It is also included in the full Excel workbook and '
+               'PowerPoint further down.')
+    return cx
 
 
 # ---------------------------------------------------------------- stock cycle -----------
@@ -1020,9 +1044,40 @@ def run_cycle(ticker, isin, ccy):
         return
     keep = [(k, v) for k, v in (('ticker', ticker), ('isin', isin), ('ccy', ccy)) if v]
     company_query = urllib.parse.urlencode(keep)
-    st.markdown(cpg.build(result, name, symbol, (resolution or {}).get('exchange'),
-                          (resolution or {}).get('currency') or ccy, true_isin,
-                          company_query), unsafe_allow_html=True)
+    exchange = (resolution or {}).get('exchange')
+    shown_ccy = (resolution or {}).get('currency') or ccy
+    html = cpg.build(result, name, symbol, exchange, shown_ccy, true_isin, company_query)
+    st.markdown(html, unsafe_allow_html=True)
+
+    # the same three exports the company page offers, built from the same result
+    meta = {'name': name, 'symbol': symbol, 'exchange': exchange, 'ccy': shown_ccy,
+            'isin': true_isin}
+    stem = (f'MICS_{re.sub(r"[^A-Za-z0-9]+", "-", str(symbol or ticker)).strip("-")}_cycle_'
+            f'{datetime.date.today():%Y-%m-%d}')
+    report = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+              '<meta name="viewport" content="width=device-width,initial-scale=1">'
+              f'<title>{name} stock cycle</title>'
+              '<style>@page{size:A4 portrait;margin:11mm 9mm}'
+              'body{margin:0;background:#e7ecf3;padding:16px}'
+              '@media print{body{background:#fff;padding:0}}</style></head><body>'
+              + html + '</body></html>')
+    c1, c2, c3 = st.columns(3)
+    try:
+        import cycle_exports as cye
+        c1.download_button('Excel workbook', cye.build_xlsx(result, meta),
+                           file_name=stem + '.xlsx',
+                           mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                           use_container_width=True)
+        c2.download_button('PowerPoint', cye.build_pptx(result, meta), file_name=stem + '.pptx',
+                           mime='application/vnd.openxmlformats-officedocument.'
+                                'presentationml.presentation', use_container_width=True)
+    except Exception as e:                       # an export must never take the page down
+        c1.caption(f'Excel and PowerPoint exports are unavailable: {e}')
+    c3.download_button('Printable page (HTML)', report, file_name=stem + '.html',
+                       mime='text/html', use_container_width=True)
+    st.caption('The Excel workbook and the PowerPoint carry the same figures as this page, '
+               'with every phase, holding period, definition and limitation. The printable '
+               'page opens in a browser; press Ctrl+P to save it as a PDF.')
     st.divider()
     b1, b2, _ = st.columns([1, 1, 4])
     if b1.button('Full deep analysis', use_container_width=True):
@@ -1193,7 +1248,6 @@ def run_company(ticker, isin, ccy):
         st.session_state['recent'] = recent[:8]
 
     render(st, tv_entry or {}, true_isin, yf_data, stats, forensics, resolution)
-    render_competitors(tv_isin, tv_entry, stats)
     st.divider()
     b1, b2, _ = st.columns([1, 1, 4])
     if b1.button('Back to search', use_container_width=True):

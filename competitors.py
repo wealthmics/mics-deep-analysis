@@ -157,7 +157,9 @@ CSS = """
 <style>
 .an .comp .wrap{overflow-x:auto}
 .an .comp table{min-width:720px}
-.an .comp th,.an .comp td{padding:8px 10px;white-space:nowrap}
+.an .comp th,.an .comp td{padding:8px 10px;white-space:nowrap;border-left:none;
+border-right:none;border-top:none}
+.an .comp table{border:none}
 .an .comp th:first-child,.an .comp td:first-child{padding-left:0}
 .an .comp th a{color:#1f3864;text-decoration:none;border-bottom:1px solid #d8dee9}
 .an .comp th small{display:block;font-size:9.5px;font-weight:600;letter-spacing:0;
@@ -172,16 +174,17 @@ color:#1f3864;padding-top:16px;border-bottom:1px solid #d8dee9}
 
 
 def reading(subject, companies, rows):
-    """What the table says about the subject, in two sentences."""
+    """What the table says about the subject, in two sentences. Returns HTML with <b>."""
     name = subject.get('name') or subject.get('ticker')
     top, bottom, upper, counted = [], [], 0, 0
-    for lab, key, rk, n in rows:
+    for row in rows:
+        rk, n = row['rank'], row['n']
         if rk is None or n < 3:
             continue
         counted += 1
         if rk <= n // 2:
             upper += 1
-        words = SAY.get(key, lab)
+        words = SAY.get(row['key'], row['label'])
         if rk == 1:
             top.append(words)
         elif rk == n:
@@ -204,74 +207,96 @@ def reading(subject, companies, rows):
     return s
 
 
-def build(subject_key, subject, peers, sector_median, as_of):
-    """subject and peers are feed entries (or Yahoo stand-ins marked _source='Yahoo')."""
-    companies = [subject] + peers
-    head = ['<th>Measure</th>']
-    for i, c in enumerate(companies):
-        tick = esc(c.get('ticker') or '')
-        if c.get('_source') == 'Yahoo':
-            name = f'{tick}<small>{esc((c.get("name") or "")[:22])}, Yahoo</small>'
-        elif i == 0:
-            name = f'{tick}<small>{esc((c.get("name") or "")[:22])}</small>'
-        else:
-            q = '&amp;'.join(f'{k}={esc(v)}' for k, v in (('ticker', c.get('ticker')),
-                                                         ('isin', c.get('_key')),
-                                                         ('ccy', c.get('ccy'))) if v)
-            name = (f'<a href="?{q}" target="_self">{tick}</a>'
-                    f'<small>{esc((c.get("name") or "")[:22])}</small>')
-        head.append(f'<th class="{"me" if i == 0 else ""}">{name}</th>')
-    head += ['<th>Rank</th>', '<th>Peer median</th>', '<th>Sector median</th>']
+def compute(subject_key, subject, peers, sector_median, as_of):
+    """Everything the section and its exports show, worked out once.
 
-    body, rows = [], []
+    subject and peers are feed entries, or Yahoo stand-ins marked _source='Yahoo'.
+    """
+    companies = [dict(subject, _key=subject_key)] + peers
+    groups, flat = [], []
     for group, items in METRICS:
-        body.append(f'<tr class="grp"><td colspan="{len(companies) + 4}">{esc(group)}</td></tr>')
+        rows = []
         for lab, key, kind, higher in items:
             rk_map, n = ranks(companies, key, higher) if higher is not None else ({}, 0)
-            cells = []
-            for i, c in enumerate(companies):
-                v = c.get(key)
-                txt = minus(f(v, kind))
-                if key in VALUATION and v is not None and v <= 0:
-                    txt = 'loss'
-                cls = ' '.join(x for x in ('me' if i == 0 else '',
-                                           'best' if rk_map.get(i) == 1 and n >= 2 else '') if x)
-                cells.append(f'<td class="num {cls}">{txt}</td>')
-            rk = rk_map.get(0)
-            rows.append((lab, key, rk, n))
-            rank_txt = f'{ordinal(rk)} of {n}' if rk else 'n/a'
-            peer_vals = [c.get(key) for c in peers if usable(key, c.get(key))]
-            pm = median(peer_vals)
-            sm = (sector_median or {}).get(key)
-            fmt = (lambda v: minus(f(v, kind)))
-            body.append(f'<tr><td class="lab">{esc(lab)}</td>{"".join(cells)}'
-                        f'<td class="rk">{rank_txt if higher is not None else ""}</td>'
-                        f'<td class="num">{fmt(pm)}</td>'
-                        f'<td class="num">{fmt(sm) if key != "mcap" else ""}</td></tr>')
+            values = [c.get(key) for c in companies]
+            row = {'label': lab, 'key': key, 'kind': kind, 'higher': higher,
+                   'values': values, 'ranks': rk_map, 'n': n, 'rank': rk_map.get(0),
+                   'best': {i for i, r in rk_map.items() if r == 1} if n >= 2 else set(),
+                   'peer_median': median([v for v in values[1:] if usable(key, v)]),
+                   'sector_median': None if key == 'mcap' else (sector_median or {}).get(key)}
+            rows.append(row)
+            flat.append(row)
+        groups.append((group, rows))
 
     yahoo = [c.get('ticker') for c in peers if c.get('_source') == 'Yahoo']
-    notes = [f'TradingView figures as at {esc(as_of or "the latest feed")}, trailing twelve '
-             f'months unless the measure says otherwise, the same figures the screener ranks on.',
+    notes = [f'TradingView figures as at {as_of or "the latest feed"}, trailing twelve months '
+             f'unless the measure says otherwise, the same figures the screener ranks on.',
              'Rank is this company\'s place among every company in the table that reports the '
-             'measure, 1st being the best. Lower is better for P/E, forward P/E and debt to '
-             'equity. A loss-making company has no P/E and is not ranked on it. The best value '
-             'in each row is in green.',
+             'measure, 1st being the best, and equal values share a rank. Lower is better for '
+             'P/E, forward P/E and debt to equity. A loss-making company has no P/E and is not '
+             'ranked on it. The best value in each row is in green.',
              'Peer median is the middle value of the competitors shown, excluding this company. '
              'Sector median is the whole TradingView universe for its GICS sector, not only the '
              'names in the feed.',
              'Price returns are in each stock\'s own listing currency, so currency moves are '
              'part of any gap between them.']
     if yahoo:
-        notes.append(f'{esc(", ".join(yahoo))} {"is" if len(yahoo) == 1 else "are"} not in the '
+        notes.append(f'{", ".join(yahoo)} {"is" if len(yahoo) == 1 else "are"} not in the '
                      f'TradingView feed, so {"its" if len(yahoo) == 1 else "their"} figures come '
                      f'from Yahoo and may cover a different period. Yahoo does not publish ROIC, '
                      f'interest cover, Altman Z, Piotroski F, or year to date and five year '
                      f'returns, so those cells are empty.')
+    return {'subject': companies[0], 'companies': companies, 'groups': groups, 'rows': flat,
+            'reading': reading(subject, companies, flat), 'notes': notes, 'as_of': as_of,
+            'industry': subject.get('industry'), 'gics': subject.get('gics')}
 
-    return (CSS + '<div class="an"><div class="card comp"><h2>Competitors</h2>'
-            f'<div class="sub">{esc(subject.get("name") or "")} against the companies chosen '
-            f'above, measure by measure.</div>'
-            f'<div class="read" style="margin:0 0 14px">{reading(subject, companies, rows)}</div>'
+
+def cell_text(v, kind, key):
+    if key in VALUATION and v is not None and v <= 0:
+        return 'loss'
+    return minus(f(v, kind))
+
+
+def build(cx):
+    """The section as one block of HTML, from what compute returned."""
+    companies = cx['companies']
+    head = ['<th>Measure</th>']
+    for i, c in enumerate(companies):
+        tick = esc(c.get('ticker') or '')
+        short = esc((c.get('name') or '')[:22])
+        if c.get('_source') == 'Yahoo':
+            name = f'{tick}<small>{short}, Yahoo</small>'
+        elif i == 0:
+            name = f'{tick}<small>{short}</small>'
+        else:
+            q = '&amp;'.join(f'{k}={esc(v)}' for k, v in (('ticker', c.get('ticker')),
+                                                         ('isin', c.get('_key')),
+                                                         ('ccy', c.get('ccy'))) if v)
+            name = f'<a href="?{q}" target="_self">{tick}</a><small>{short}</small>'
+        head.append(f'<th class="{"me" if i == 0 else ""}">{name}</th>')
+    head += ['<th>Rank</th>', '<th>Peer median</th>', '<th>Sector median</th>']
+
+    body = []
+    for group, rows in cx['groups']:
+        body.append(f'<tr class="grp"><td colspan="{len(companies) + 4}">{esc(group)}</td></tr>')
+        for row in rows:
+            cells = []
+            for i, v in enumerate(row['values']):
+                cls = ' '.join(x for x in ('me' if i == 0 else '',
+                                           'best' if i in row['best'] else '') if x)
+                cells.append(f'<td class="num {cls}">{cell_text(v, row["kind"], row["key"])}</td>')
+            rank_txt = (f'{ordinal(row["rank"])} of {row["n"]}' if row['rank'] else 'n/a') \
+                if row['higher'] is not None else ''
+            sm = '' if row['key'] == 'mcap' else minus(f(row['sector_median'], row['kind']))
+            body.append(f'<tr><td class="lab">{esc(row["label"])}</td>{"".join(cells)}'
+                        f'<td class="rk">{rank_txt}</td>'
+                        f'<td class="num">{minus(f(row["peer_median"], row["kind"]))}</td>'
+                        f'<td class="num">{sm}</td></tr>')
+
+    return (CSS + '<div class="an"><div class="card comp"><h2>Measure by measure</h2>'
+            f'<div class="sub">{esc(cx["subject"].get("name") or "")} against the companies '
+            f'chosen above.</div>'
+            f'<div class="read" style="margin:0 0 14px">{cx["reading"]}</div>'
             f'<div class="wrap"><table><thead><tr>{"".join(head)}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>'
-            f'<div class="cnote">{" ".join(notes)}</div></div></div>')
+            f'<div class="cnote">{esc(" ".join(cx["notes"]))}</div></div></div>')

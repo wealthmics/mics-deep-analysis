@@ -455,6 +455,12 @@ def build_xlsx(ctx):
         r = title(ws, 'Valuation, ownership and the analyst view', '')
         table(ws, r, ['Measure', 'Value', 'Source'], vr, aligns=['left', 'right', 'left'])
 
+    # ---- Competitors, when the page had any chosen
+    if ctx.get('competitors'):
+        import comp_exports
+        from deck import Book
+        comp_exports.add_sheet(Book(wb), ctx['competitors'])
+
     # ---- Notes
     ws = sheet('Notes', widths=(24, 100))
     r = title(ws, 'Notes and sources', f'Prepared {datetime.date.today():%d %B %Y}')
@@ -783,6 +789,12 @@ def build_pptx(ctx):
         text(s, X0 + k * (CW / 3), y, CW / 3 - 0.2,
              6.85 - y, [(h_, {'bold': True, 'color': NAVY, 'size': 12})] +
              [(t, {'space': 4, 'size': 10}) for t in (xs or ['Nothing stands out.'])], size=10)
+
+    # competitors, when the page had any chosen, in the same style and page count
+    if ctx.get('competitors'):
+        import comp_exports
+        from deck import Deck
+        comp_exports.add_slides(Deck(footer, prs=prs, count=count), ctx['competitors'])
 
     # 9. notes
     s = content('Notes and sources')

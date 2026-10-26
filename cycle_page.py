@@ -14,7 +14,7 @@ import cycle as cy
 import risk as rk
 from page import CSS, DOWN, NAVY, UP, GOLD, HOVER_BAND_UNITS, esc, f, minus
 
-SUPPORT_FILL, RESIST_FILL, BEAR_FILL = '#e3f1e8', '#fbe6e4', '#eef2f8'
+SUPPORT_FILL, RESIST_FILL, BEAR_FILL = '#bfe3cc', '#f4c4bf', '#eef2f8'
 
 
 # ---------------------------------------------------------------- formatting -------------
@@ -60,7 +60,7 @@ def svg_cycle(close, points, current, phases, zones, width=720, height=280):
     t0, t1 = s.index[0], s.index[-1]
     span_t = max(1, (t1 - t0).days)
     levels = [float(v) for v in s.values]
-    extra = [z['low'] for z, _ in zones] + [z['high'] for z, _ in zones]
+    extra = [z['low'] for z, _, _ in zones] + [z['high'] for z, _, _ in zones]
     if current.get('trigger'):
         extra.append(current['trigger'])
     lo = math.log(min(levels + extra))
@@ -92,10 +92,19 @@ def svg_cycle(close, points, current, phases, zones, width=720, height=280):
         parts.append(f'<rect x="{xa:.1f}" y="0" width="{max(1, xb - xa):.1f}" '
                      f'height="{height}" fill="{BEAR_FILL}"/>')
 
-    for z, fill in zones:
+    # A zone built from one turning point has no height of its own, which drew it as a
+    # hairline nobody could see. Each zone is now at least 10 units tall, centred on its
+    # levels, with a solid line in its own colour along the level itself.
+    for z, fill, edge in zones:
         ya, yb = y(z['high']), y(z['low'])
-        parts.append(f'<rect x="0" y="{ya:.1f}" width="{width}" height="{max(2, yb - ya):.1f}" '
-                     f'fill="{fill}" opacity="0.9"/>')
+        if yb - ya < 10:
+            mid_y = (ya + yb) / 2
+            ya, yb = mid_y - 5, mid_y + 5
+        parts.append(f'<rect x="0" y="{ya:.1f}" width="{width}" height="{yb - ya:.1f}" '
+                     f'fill="{fill}"/>')
+        level = y(z['high'] if edge == UP else z['low'])
+        parts.append(f'<line x1="0" y1="{level:.1f}" x2="{width}" y2="{level:.1f}" '
+                     f'stroke="{edge}" stroke-width="1.6"/>')
 
     if current.get('trigger'):
         yt = y(current['trigger'])
@@ -155,7 +164,18 @@ def svg_cycle(close, points, current, phases, zones, width=720, height=280):
         align = ('left:0;text-align:left' if t == 0 else 'right:0;text-align:right' if t == 5
                  else f'left:{t * 20}%;transform:translateX(-50%)')
         dates.append(f'<span style="position:absolute;{align}">{when.strftime(fmt)}</span>')
-    return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{"".join(parts)}</div>'
+    tags = ''
+    for z, _, edge in zones:
+        level = z['high'] if edge == UP else z['low']
+        top_pct = max(0.0, min(100.0, y(level) / height * 100))
+        word = 'Support' if edge == UP else 'Resistance'
+        tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:{edge};'
+                 f'border-color:{edge}">{word} {px(level)}</span>')
+    if current.get('trigger'):
+        top_pct = max(0.0, min(100.0, y(current['trigger']) / height * 100))
+        tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:#8a6300;'
+                 f'border-color:{GOLD};left:auto;right:58px">Trigger {px(current["trigger"])}</span>')
+    return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{"".join(parts)}{tags}</div>'
             f'<div class="xaxis">{"".join(dates)}</div>')
 
 
@@ -164,8 +184,10 @@ LEGEND = (f'<div class="clegend">'
           f'<span><i style="background:{BEAR_FILL};height:10px"></i>Bear phase</span>'
           f'<span><b style="color:{DOWN}">&#9660;</b>Peak</span>'
           f'<span><b style="color:{UP}">&#9650;</b>Trough</span>'
-          f'<span><i style="background:{SUPPORT_FILL};height:10px"></i>Nearest support</span>'
-          f'<span><i style="background:{RESIST_FILL};height:10px"></i>Nearest resistance</span>'
+          f'<span><i style="background:{SUPPORT_FILL};height:10px;border-top:2px solid {UP}">'
+          f'</i>Nearest support</span>'
+          f'<span><i style="background:{RESIST_FILL};height:10px;border-bottom:2px solid {DOWN}">'
+          f'</i>Nearest resistance</span>'
           f'<span><i style="background:repeating-linear-gradient(90deg,{GOLD} 0 6px,'
           f'transparent 6px 10px)"></i>Trigger that ends the current phase</span></div>')
 
@@ -174,8 +196,8 @@ def chart_card(r):
     """Two ranges, switched in the browser with the same radio and CSS trick as the company
     page. Five years shows the levels that matter now; the full record shows every cycle."""
     close, cur = r['close'], r['current']
-    shown = [(z, fill) for z, fill in ((r['support'], SUPPORT_FILL),
-                                       (r['resistance'], RESIST_FILL)) if z]
+    shown = [(z, fill, edge) for z, fill, edge in ((r['support'], SUPPORT_FILL, UP),
+                                                   (r['resistance'], RESIST_FILL, DOWN)) if z]
     ranges = [('5Y', close.loc[close.index[-1] - pd.DateOffset(years=5):]), ('Max', close)]
     if len(ranges[0][1]) > len(close) * 0.9:
         ranges = [('Max', close)]
@@ -344,7 +366,7 @@ def typical_card(r):
         return (f'<td class="val">{fmt(d["median"])}</td>'
                 f'<td>{fmt(d["p25"])} to {fmt(d["p75"])}</td><td>{d["n"]}</td>')
 
-    body = ['<table><thead><tr><th>Measure</th><th>Median</th><th>Middle half</th>'
+    body = ['<table class="nw"><thead><tr><th>Measure</th><th>Median</th><th>Middle half</th>'
             '<th>Cycles</th><th>Median, no extremes</th><th>Middle half</th><th>Cycles</th>'
             '</tr></thead><tbody>']
     for label, key, kind, what in rows:
@@ -401,7 +423,7 @@ def history_card(r):
     if not r['phases']:
         return card('Every completed phase', '<div class="body-text">None yet. A phase is '
                     'complete once the turn that ends it has been confirmed.</div>')
-    rows = ['<table><thead><tr><th>Phase</th><th>From</th><th>To</th><th>Start price</th>'
+    rows = ['<table class="nw"><thead><tr><th>Phase</th><th>From</th><th>To</th><th>Start price</th>'
             '<th>End price</th><th>Months</th><th>Change</th><th>Notes</th></tr></thead><tbody>']
     for p in reversed(r['phases']):
         cls = 'up' if p['kind'] == 'bull' else 'down'
@@ -420,7 +442,7 @@ def history_card(r):
 def holdings_card(r):
     if not r['holdings']:
         return card('Every holding period', '<div class="body-text">None completed yet.</div>')
-    rows = ['<table><thead><tr><th>In on</th><th>At</th><th>Out on</th><th>At</th>'
+    rows = ['<table class="nw"><thead><tr><th>In on</th><th>At</th><th>Out on</th><th>At</th>'
             '<th>Months</th><th>Price return</th><th>With dividends</th><th>Notes</th>'
             '</tr></thead><tbody>']
     for h in reversed(r['holdings']):
@@ -530,6 +552,26 @@ def limitations_card():
 
 
 # ---------------------------------------------------------------- the page ---------------
+# Rules for this page only, all scoped to .cy so the company page is untouched.
+# Streamlit draws its own border round every table cell inside markdown and the shared
+# stylesheet gives cells no side padding, which ran the columns into each other. Cells get
+# room on both sides and only the horizontal rules stay. Tables of figures keep each value on
+# one line; only the measure names wrap.
+CY_CSS = """<style>
+.an.cy table{border:none}
+.an.cy th,.an.cy td{padding:9px 10px;border-left:none;border-right:none;border-top:none}
+.an.cy th:first-child,.an.cy td:first-child{padding-left:0}
+.an.cy th:last-child,.an.cy td:last-child{padding-right:0}
+.an.cy .grid{margin-top:12px}
+.an.cy .full{margin-top:12px}
+.an.cy .full>.card{overflow-x:auto}
+.an.cy .nw th,.an.cy .nw td{white-space:nowrap}
+.an.cy .nw td.lab{white-space:normal}
+.an.cy .cylab{position:absolute;left:6px;transform:translateY(-50%);font-size:10px;
+font-weight:700;background:#fff;border:1px solid;border-radius:3px;padding:1px 6px;
+pointer-events:none;white-space:nowrap}
+</style>"""
+
 def build(r, name, ticker, exchange, ccy, isin, company_query):
     """company_query is the ticker, ISIN and currency part of the link, so the back link
     returns to the same company's deep analysis."""
@@ -541,7 +583,7 @@ def build(r, name, ticker, exchange, ccy, isin, company_query):
         cur.get('state'), ('No phase yet', ''))
     # the company page stretches its cards so both columns end level; here the rail is much
     # shorter than the tables, and stretching left large empty cards, so cards keep their size
-    H = [CSS, '<style>.an.cy .grid>div>.card{flex:0 0 auto}</style>', '<div class="an cy">',
+    H = [CSS, CY_CSS, '<div class="an cy">',
          f'<div class="printhead"><span>MICS International, internal research</span>'
          f'<span>Prices to {day(r["last_date"])}</span></div>',
          f'<div class="mast"><div><div class="eyebrow">Stock cycle, prices to '
@@ -554,9 +596,11 @@ def build(r, name, ticker, exchange, ccy, isin, company_query):
          f'<div class="px num">{px(cur["last_price"])}<span>{esc(ccy or "")}</span></div>'
          f'<div class="chg {state[1]}">{state[0]}</div></div></div>',
          f'<div class="read" style="margin-top:12px">{reading(r)}</div>',
-         '<div class="grid"><div>', chart_card(r), typical_card(r), history_card(r),
-         holdings_card(r), '</div><div>', now_card(r), levels_card(r), rule_card(r),
-         '</div></div>', definitions_card(), limitations_card(),
+         '<div class="grid"><div>', chart_card(r), '</div><div>', now_card(r), '</div></div>',
+         '<div class="grid"><div>', typical_card(r), '</div><div>', levels_card(r),
+         rule_card(r), '</div></div>',
+         '<div class="full">', history_card(r), holdings_card(r), '</div>',
+         definitions_card(), limitations_card(),
          '<div class="disc"><b>MICS International internal research.</b> This page describes '
          'how a share price has moved. It is not a recommendation to buy, hold or sell, and '
          'past cycles do not guarantee future ones.</div></div>']
