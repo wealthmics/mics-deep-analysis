@@ -614,7 +614,7 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
         if any(e.get('marquee') for _, e in hits[:12]):
             st.caption('\u2605 held by at least one investor tracked by Dataroma')
         for isin, e in hits[:12]:
-            row = st.columns([3, 2, 2, 2, 1.5])
+            row = st.columns([3, 2, 2, 2, 1.5, 1.5])
             # A star rather than the word, which is how this always read. The word sat in the
             # same weight and size as the ticker beside it and had to be read before it could
             # be dismissed, on every row, whether or not it was the thing being looked for.
@@ -629,6 +629,20 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
                 if e.get('ccy'):
                     st.query_params['ccy'] = e['ccy']
                 st.rerun()
+            if row[5].button('Cycle', key=f'cy_{isin}'):
+                open_cycle(e.get('ticker'), isin, e.get('ccy'))
+
+    st.markdown(pg.section('Stock cycle', 'bull and bear phases, levels, holding periods'),
+                unsafe_allow_html=True)
+    c1, c2 = st.columns([4, 1])
+    c1.markdown(pg.lede('Where a stock sits in its own price cycle: the current phase and the '
+                        'close that would end it, its support and resistance, and how long its '
+                        'past cycles lasted. Use the Cycle button beside any search result, or '
+                        'open the cycle page and search there.'), unsafe_allow_html=True)
+    if c2.button('Open stock cycle', key='land_cycle', use_container_width=True):
+        st.query_params.clear()
+        st.query_params['view'] = 'cycle'
+        st.rerun()
 
     st.markdown(pg.section('Analyse an index',
                            f'{len(ix_reg.INDEXES)} markets, global to single country'),
@@ -832,6 +846,194 @@ def pg_section_html(title):
     return pg.section(title)
 
 
+# ---------------------------------------------------------------- competitors -----------
+@st.cache_data(ttl=3600 * 6, show_spinner=False)
+def load_peer_info(symbol):
+    """Yahoo's info block for a competitor that is not in the feed, and the rate that turns
+    its market cap into US dollars. Prices quoted in a minor unit (pence, cents) get no rate,
+    because Yahoo is not consistent about which unit their market cap is in."""
+    import yfinance as yf
+    try:
+        info = yf.Ticker(symbol).info or {}
+    except Exception:
+        return {}, None
+    if not info.get('shortName') and not info.get('longName'):
+        return {}, None
+    ccy = info.get('currency') or ''
+    rate = None
+    if ccy.upper() == 'USD':
+        rate = 1.0
+    elif ccy and ccy not in ('GBp', 'GBX', 'ZAc', 'ZAC', 'ILA'):
+        try:
+            rate = float(yf.Ticker(f'{ccy.upper()}USD=X').fast_info['last_price'])
+        except Exception:
+            rate = None
+    return info, rate
+
+
+def render_competitors(subject_key, subject, sector_stats):
+    """A section of its own under the company page. The page above is left exactly as it
+    was; this only adds the picker and one table after it."""
+    import page as pg
+    import competitors as cp
+    st.markdown(pg.section('Competitors', 'the company against the companies it competes with'),
+                unsafe_allow_html=True)
+    if not subject:
+        st.info('This company is not in the TradingView feed, so there is nothing to compare '
+                'it with on the same basis.')
+        return
+    try:
+        feed = load_tv_feed()
+    except Exception as e:
+        st.warning(f'The feed did not load ({e}), so competitors cannot be listed.')
+        return
+    stocks = feed.get('stocks') or {}
+    ident = subject_key or subject.get('ticker')
+    default = cp.auto_peers(feed, subject_key, subject)
+    st.markdown(pg.lede(
+        f'The list starts with the {len(default)} companies closest in size within the same '
+        f'TradingView industry, <b>{pg.esc(subject.get("industry") or "not given")}</b>. '
+        f'Industries are broad, so remove any that do not really compete and add the ones '
+        f'that do. Up to {cp.MAX_PEERS} in total.'), unsafe_allow_html=True)
+    c1, c2 = st.columns([3, 2])
+    picked = c1.multiselect('Competitors from the feed', options=cp.option_order(feed, subject_key,
+                                                                                 subject),
+                            default=default, format_func=lambda k: cp.label(stocks[k]),
+                            max_selections=cp.MAX_PEERS, key=f'peers_{ident}')
+    extra = c2.text_input('Not in the feed? Add Yahoo symbols, separated by commas',
+                          placeholder='005930.KS, 000660.KS', key=f'peers_x_{ident}')
+    peers = [dict(stocks[k], _key=k) for k in picked]
+    room = cp.MAX_PEERS - len(peers)
+    symbols = [x.strip().upper() for x in (extra or '').split(',') if x.strip()]
+    if len(symbols) > room:
+        st.caption(f'Only the first {room} added symbol{"s" if room != 1 else ""} '
+                   f'{"are" if room != 1 else "is"} used, to keep the table to '
+                   f'{cp.MAX_PEERS} competitors.')
+    for sym in symbols[:max(0, room)]:
+        with st.spinner(f'Looking up {sym} on Yahoo...'):
+            info, rate = load_peer_info(sym)
+        if info:
+            peers.append(cp.from_yahoo(sym, info, rate))
+        else:
+            st.caption(f'Yahoo returned nothing for {sym}. Check it is written the way Yahoo '
+                       f'writes it, for example 005930.KS or SHEL.L.')
+    if not peers:
+        st.info('Pick at least one competitor to compare against.')
+        return
+    sector = {k: v.get('median') for k, v in
+              ((sector_stats or {}).get(subject.get('gics')) or {}).items() if isinstance(v, dict)}
+    st.markdown(cp.build(subject_key, subject, peers, sector, feed.get('as_of')),
+                unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------- stock cycle -----------
+def open_cycle(ticker, isin, ccy):
+    st.query_params.clear()
+    st.query_params['view'] = 'cycle'
+    if ticker:
+        st.query_params['ticker'] = ticker
+    if isin:
+        st.query_params['isin'] = isin
+    if ccy:
+        st.query_params['ccy'] = ccy
+    st.rerun()
+
+
+def render_cycle_home():
+    """The cycle page with no company chosen: search the same feed as the main landing."""
+    import page as pg
+    st.markdown(pg.CSS, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="an"><div class="mast"><div>'
+        '<div class="eyebrow">MICS International, internal research</div>'
+        '<h1>Stock cycle</h1>'
+        '<div class="meta">Bull and bear phases, support and resistance, holding periods</div>'
+        '</div><div class="quote"><div class="eyebrow"><a class="back" href="?" '
+        'target="_self">Company search</a></div></div></div></div>', unsafe_allow_html=True)
+    st.markdown(pg.lede(
+        'Pick a company to see where it sits in its own price cycle. A phase changes only when '
+        'the price moves by a set amount from its last high or low, sized to how volatile that '
+        'stock normally is. The page shows the current phase and the close that would end it, '
+        'the nearest support and resistance, and how long past cycles lasted, with every '
+        'limitation stated alongside.'), unsafe_allow_html=True)
+    try:
+        feed = load_tv_feed()
+    except Exception as e:
+        st.error(f'Could not load the published feed ({e}).')
+        return
+    st.markdown(pg.section('Find a company'), unsafe_allow_html=True)
+    query = st.text_input('Ticker, company name or ISIN', key='cycle_q',
+                          placeholder='MU, Nestle, US5951121038', label_visibility='collapsed')
+    if query:
+        hits = _search_feed(feed, query)
+        if not hits:
+            st.info(f'Nothing matching "{query}" in this feed.')
+        for isin, e in hits[:12]:
+            row = st.columns([3, 2, 2, 1.5])
+            row[0].markdown(f"**{e.get('ticker')}**  \n{e.get('name')}")
+            row[1].markdown(f"{e.get('gics') or ''}  \n{e.get('country') or ''}")
+            row[2].markdown(f"{pg.f(e.get('mcap'), 'money')}  \nmarket cap")
+            if row[3].button('Cycle', key=f'cyh_{isin}'):
+                open_cycle(e.get('ticker'), isin, e.get('ccy'))
+    recent = st.session_state.get('recent', [])
+    if recent:
+        st.markdown(pg.section('Companies opened in this session'), unsafe_allow_html=True)
+        cols = st.columns(min(len(recent), 8))
+        for col, r in zip(cols, recent):
+            if col.button(r['ticker'], key=f'cyr_{r["ticker"]}', use_container_width=True):
+                open_cycle(r['ticker'], r.get('isin'), r.get('ccy'))
+
+
+def run_cycle(ticker, isin, ccy):
+    """Resolve the company the same way the deep analysis page does, then fetch its price
+    history only. Statements are not needed here, so the lighter price fetch is used."""
+    import urllib.parse
+    import cycle as cy
+    import cycle_page as cpg
+    tv_entry = None
+    try:
+        tv_isin, tv_entry = lookup(load_tv_feed(), isin=isin, ticker=ticker, ccy=ccy)
+    except Exception:
+        tv_isin, tv_entry = isin, None
+    true_isin = real_isin(tv_isin, tv_entry) if tv_entry else (
+        isin if isin and df_mod.looks_like_isin(isin) else None)
+    ccy = ccy or (tv_entry or {}).get('ccy')
+    raw = (tv_entry or {}).get('ticker') or ticker
+    resolution, symbol = None, (str(raw).strip().upper() if raw else None)
+    with st.spinner('Finding the listing on Yahoo...'):
+        if true_isin:
+            resolution = df_mod.resolve_isin(true_isin, expect_currency=ccy)
+        elif symbol:
+            resolution = df_mod.resolve_listing(symbol, (tv_entry or {}).get('name'), ccy)
+    if resolution and resolution.get('symbol') and not resolution.get('error'):
+        symbol = resolution['symbol']
+    with st.spinner(f'Loading the price history for {symbol}...'):
+        hist = load_history(symbol)
+        bench = load_benchmark()
+    bench_close = bench['Close'] if bench is not None and 'Close' in bench else None
+    result = cy.analyse(hist, bench_close)
+    name = (tv_entry or {}).get('name') or (resolution or {}).get('name') or symbol or ticker
+    if result.get('error'):
+        st.error(f'No cycle for {name}: {result["error"]}')
+        if st.button('Back to cycle search'):
+            open_cycle(None, None, None)
+        return
+    keep = [(k, v) for k, v in (('ticker', ticker), ('isin', isin), ('ccy', ccy)) if v]
+    company_query = urllib.parse.urlencode(keep)
+    st.markdown(cpg.build(result, name, symbol, (resolution or {}).get('exchange'),
+                          (resolution or {}).get('currency') or ccy, true_isin,
+                          company_query), unsafe_allow_html=True)
+    st.divider()
+    b1, b2, _ = st.columns([1, 1, 4])
+    if b1.button('Full deep analysis', use_container_width=True):
+        st.query_params.clear()
+        for k, v in keep:
+            st.query_params[k] = v
+        st.rerun()
+    if b2.button('Cycle search', use_container_width=True):
+        open_cycle(None, None, None)
+
+
 def read_link():
     """Read ?ticker=, ?isin= and ?ccy= off the URL, whichever Streamlit API exists."""
     def grab(params, key):
@@ -991,14 +1193,25 @@ def run_company(ticker, isin, ccy):
         st.session_state['recent'] = recent[:8]
 
     render(st, tv_entry or {}, true_isin, yf_data, stats, forensics, resolution)
+    render_competitors(tv_isin, tv_entry, stats)
     st.divider()
-    if st.button('Back to search'):
+    b1, b2, _ = st.columns([1, 1, 4])
+    if b1.button('Back to search', use_container_width=True):
         st.query_params.clear()
         st.rerun()
+    if b2.button('Stock cycle', key='to_cycle', use_container_width=True):
+        open_cycle(ticker, isin, ccy)
     st.caption(f'Full screener with every filter: {FEED_BASE}/')
 
 
 def main():
+    if read_param('view') == 'cycle':
+        ticker, isin, ccy = read_link()
+        if ticker or isin:
+            run_cycle(ticker, isin, ccy)
+        else:
+            render_cycle_home()
+        return
     index_key = read_param('index')
     if index_key:
         run_index(index_key)
