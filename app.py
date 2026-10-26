@@ -1258,7 +1258,40 @@ def run_company(ticker, isin, ccy):
     st.caption(f'Full screener with every filter: {FEED_BASE}/')
 
 
+# The app's own modules, in the order they depend on each other.
+OWN_MODULES = ['risk', 'page', 'cycle', 'deck', 'competitors', 'cycle_page', 'comp_exports',
+               'cycle_exports', 'exports']
+
+
+def refresh_modules():
+    """Pick up newly uploaded code without a reboot.
+
+    Streamlit runs app.py afresh on every visit but keeps every module it imports from the
+    first run. After an upload, the new app.py was therefore driving the old cycle_page.py,
+    which is how the cycle page came to show its first layout. Any module whose file has
+    changed since it was loaded is reloaded here, and so is everything after it in the list,
+    because a later module may hold names it imported from the earlier one.
+    """
+    import importlib
+    import os
+    import sys
+    stale = False
+    for name in OWN_MODULES:
+        mod = sys.modules.get(name)
+        if mod is None or not getattr(mod, '__file__', None):
+            continue
+        try:
+            stamp = os.path.getmtime(mod.__file__)
+        except OSError:
+            continue
+        if stale or getattr(mod, '_loaded_mtime', stamp) != stamp:
+            mod = importlib.reload(mod)
+            stale = True
+        mod._loaded_mtime = stamp
+
+
 def main():
+    refresh_modules()
     if read_param('view') == 'cycle':
         ticker, isin, ccy = read_link()
         if ticker or isin:
