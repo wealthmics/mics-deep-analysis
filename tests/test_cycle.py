@@ -430,3 +430,35 @@ def test_chart_draws_the_two_triggers_and_nothing_from_the_old_cycle():
             assert f'{g["level"]:,.2f}' in html
     assert 'stroke-dasharray="6,4"' not in html          # the old trigger line
     assert cpg.BEAR_FILL not in html                      # the old bear shading
+
+
+# ------------------------------------------------------------------ chart ranges ----------
+def test_chart_offers_every_range_the_history_can_fill():
+    import cycle_page as cpg
+    r = cy.analyse(path([(400, -0.45), (700, 1.4), (900, 0.2)], noise=0.012), today=TODAY)
+    html = cpg.chart_card(r)
+    years = len(r['close']) / 252
+    for lab in ('1M', '3M', '6M', '1Y', '2Y', '5Y', 'Max'):
+        assert f'class="si-{lab}"' in html and f'sp-{lab}' in html
+    assert ('si-10Y' in html) == (years > 10)
+    assert 'sbtn on"><input type="radio" name="cyspan" class="si-1Y"' in html
+    assert html.count('class="spanpanel') == len(cpg.chart_spans(r['close']))
+
+
+def test_trigger_tags_show_only_the_price_and_far_ones_are_pinned():
+    import re
+    import cycle_page as cpg
+    r = cy.analyse(path([(400, -0.45), (700, 1.4), (230, -0.24)], noise=0.012), today=TODAY)
+    marks = cpg.trigger_marks(r)
+    assert marks
+    level = marks[0][1]
+    month = r['close'].tail(21)
+    svg = cpg.svg_cycle(month, r['points'], r['current'], r['phases'], [], (), (), None, marks)
+    tags = re.findall(r'<span class="cylab"[^>]*>([^<]*)</span>', svg)
+    assert tags and all('Stage' not in t for t in tags)
+    assert any(f'{level:,.2f}' in t for t in tags)
+    far = month.max() * 2
+    svg = cpg.svg_cycle(month, r['points'], r['current'], r['phases'], [], (), (), None,
+                        ((month.index[0], far, cpg.UP, 'far'),))
+    assert f'&#8593; {far:,.2f}' in svg              # pinned to the top edge with an arrow
+    assert 'stroke-dasharray="2,3"' not in svg        # and no line squashing the price
