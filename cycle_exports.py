@@ -15,7 +15,7 @@ import pandas as pd
 import cycle as cy
 import cycle_page as cpg
 from deck import CW, DOWN, PALE, UP, X0, Book, Deck
-from exports import GOLD, NAVY, plain
+from exports import NAVY, plain
 
 PCT = '0.0%;-0.0%'
 PRICE = '#,##0.00'
@@ -51,16 +51,6 @@ def stage_rows(r):
         if sh.get('cross_date') is not None:
             cross = f'{sh["cross_kind"]} cross on {cpg.day(sh["cross_date"])}'
         rows.append(('50-day EMA vs 200-day', 'above' if sh['ema_over_sma'] else 'below', cross))
-    t = c.get('testing')
-    if t:
-        word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
-        up = t['dir'] == 'up'
-        rows += [(f'{word} level', _p(t['pivot']),
-                  f'from Stage {t["from"]}, week of {cpg.day(t["week"])}'),
-                 (f'{word} proven {"above" if up else "below"}', _p(t['proof']),
-                  f'or by {cpg.day(t["deadline"])}'),
-                 (f'{word} fails {"below" if up else "above"}', _p(t['fail']),
-                  f'2 weekly closes, back to Stage {t["from"]}')]
     rows += [('From 52-week high', _pc(sh['from_high52']), _p(sh['high52'])),
              ('From 52-week low', _pc(sh['from_low52']), _p(sh['low52']))]
     run = c.get('running')
@@ -76,32 +66,29 @@ def confidence_rows(r):
     return rows
 
 
-def now_rows(r):
-    """The big swing, as (measure, value, detail)."""
-    cur, T, F = r['current'], r['threshold'], r['fall']
-    if not cur.get('state'):
-        return [('Big swing', 'None yet', f'no move of {_pc(F, False)} down or {_pc(T, False)} '
-                                          f'up since {cpg.day(r["first_date"])}'),
-                ('Latest close', _p(cur['last_price']), cpg.day(cur['last_date']))]
-    bull = cur['state'] == 'bull'
-    need = F if bull else T
-    rows = [('Big swing', r['status']['label'], 'confirmed'),
-            ('Started', _p(cur['start_price']),
-             f'{"low" if bull else "high"} on {cpg.day(cur["start"])}'),
-            ('Confirmed', _p(cur['confirm_price']), f'close on {cpg.day(cur["confirm_date"])}'),
-            ('Length so far', f'{cur["months"]:.1f} months', ''),
-            (f'{"Highest" if bull else "Lowest"} close since', _p(cur['extreme']),
-             cpg.day(cur['extreme_date'])),
-            ('Latest close', _p(cur['last_price']), cpg.day(cur['last_date'])),
-            ('From the high' if bull else 'From the low', _pc(cur['from_extreme']),
-             f'{abs(cur["from_extreme"]) / need * 100:.0f}% of the {_pc(need, False)} '
-             f'{"fall" if bull else "rise"} that ends it'),
-            (f'Ends on a close {"below" if bull else "above"}', _p(cur['trigger']),
-             f'{"high minus" if bull else "low plus"} {_pc(need, False)}'),
-            ('Distance to that level', _pc(cur['to_trigger']), '')]
-    if bull and cur.get('held_return') is not None:
-        rows.append(('Held since confirmation', _pc(cur['held_return']),
-                     f'{cur["held_months"]:.1f} months, dividends included'))
+def trigger_rows(r):
+    """The two levels that would change the stage, as (measure, value, detail)."""
+    sgr = r.get('stage') or {}
+    if not sgr or sgr.get('error'):
+        return []
+    c = sgr['current']
+    rows = []
+    for side in ('up', 'down'):
+        g = c['triggers'][side]
+        arrow = 'Up' if side == 'up' else 'Down'
+        if g:
+            rows.append((f'{arrow}: turns to {g["name"]}', _p(g['level']),
+                         f'{_pc(g["distance"])} away. {g["rule"][0].upper()}{g["rule"][1:]}'
+                         + ('. Moves weekly with the average' if g['moves'] else '') + '.'))
+        else:
+            rows.append((f'{arrow}: no stage change', '',
+                         'a move this way would only continue the current stage'))
+    t = c.get('testing')
+    if t:
+        word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
+        rows.append((f'{word} being tested', _p(t['pivot']),
+                     f'proven {"above" if t["dir"] == "up" else "below"} {_p(t["proof"])} or on '
+                     f'{cpg.day(t["deadline"])}'))
     return rows
 
 
@@ -155,26 +142,26 @@ def level_rows(r):
             out.append((label, 'none', 'no past turn on that side of the price'))
             continue
         out.append((label, cpg.zone_text(z).replace('\u2212', '-'),
-                    f'{z["troughs"]} trough(s), {z["peaks"]} peak(s), last {cpg.day(z["last"])}'))
+                    f'{z["troughs"]} turning low(s), {z["peaks"]} turning high(s), last {cpg.day(z["last"])}'))
         out.append(('  held / broke', f'{z["holds"]} / {z["breaks"]}', ''))
     if r['inside']:
         out.append(('Latest close sits inside', cpg.zone_text(r['inside']), ''))
     years = (r['last_date'] - r['first_date']).days / 365.25
-    out += [('Rise threshold', _pc(r['threshold'], False),
+    out += [('Rise size for a major move', _pc(r['threshold'], False),
              f'median annual volatility over the last {r.get("threshold_years", cy.THRESHOLD_YEARS)} '
              f'years, kept between 15% and 35%'),
-            ('Fall threshold', _pc(r['fall'], False), 'the same move in log terms'),
+            ('Fall size for a major move', _pc(r['fall'], False), 'the same move in log terms'),
             ('Market used for market-wide falls', r.get('bench_name') or 'S&P 500', ''),
             ('History used', f'{years:.1f} years', f'from {cpg.day(r["first_date"])}'),
-            ('Completed phases', str(len(r['phases'])),
+            ('Completed major moves', str(len(r['phases'])),
              f'{r["extremes"]} extreme' if r['extremes'] else 'none extreme')]
     return out
 
 
-TYPICAL = [('Bull phase length (months)', 'bull_months', 'months'),
-           ('Bull phase gain', 'bull_change', 'pct'),
-           ('Bear phase length (months)', 'bear_months', 'months'),
-           ('Bear phase fall', 'bear_change', 'pct'),
+TYPICAL = [('Major rise length (months)', 'bull_months', 'months'),
+           ('Major rise gain', 'bull_change', 'pct'),
+           ('Major fall length (months)', 'bear_months', 'months'),
+           ('Major fall size', 'bear_change', 'pct'),
            ('Holding period (months)', 'hold_months', 'months'),
            ('Captured return, dividends included', 'hold_total', 'pct')]
 
@@ -212,20 +199,25 @@ def phase_note(p):
 
 
 def monthly(r):
-    """Month-end traded closes, with the current trigger and the nearest zones as levels."""
+    """Month-end traded closes."""
     m = r['close'].resample('ME').last().dropna()
     return m
 
 
 def daily_phase(r):
     close = r['close']
+    word = {'bull': 'rise', 'bear': 'fall'}
     phase = pd.Series('before the first turn', index=close.index)
     for p in r['phases']:
-        phase[(close.index >= p['start']) & (close.index < p['end'])] = p['kind']
+        phase[(close.index >= p['start']) & (close.index < p['end'])] = word[p['kind']]
     cur = r['current']
     if cur.get('state') and cur.get('start') is not None:
-        phase[close.index >= cur['start']] = cur['state'] + ' (open)'
-    return phase
+        phase[close.index >= cur['start']] = word[cur['state']] + ' (not yet confirmed)'
+    stage = None
+    sgr = r.get('stage') or {}
+    if sgr and not sgr.get('error'):
+        stage = sgr['weekly']['stage'].reindex(close.index, method='ffill')
+    return phase, stage
 
 
 def _meta_line(meta):
@@ -240,13 +232,16 @@ def build_pptx(r, meta):
     deck = Deck(f'MICS International   |   {name}   |   Stock cycle, prices to {last}')
     cur = r['current']
     hl = cpg.headline(r)
-    if cur.get('state'):
-        state_line = (f'Big {cur["state"]} swing since {cpg.day(cur["start"])}, ends on a close '
-                      f'{"below" if cur["state"] == "bull" else "above"} {_p(cur["trigger"])}')
-    else:
-        state_line = 'No big swing confirmed yet'
-    if hl:
-        state_line = f'{hl}.   {state_line}'
+    state_line = hl or 'No stage yet'
+    sgr = r.get('stage') or {}
+    if hl and not sgr.get('error'):
+        bits = []
+        for side, word in (('up', 'above'), ('down', 'below')):
+            g = sgr['current']['triggers'][side]
+            if g:
+                bits.append(f'{g["name"]} {word} {_p(g["level"])}')
+        if bits:
+            state_line += '.   Turns to ' + ', or '.join(bits)
     deck.cover(name, ['Stock cycle', state_line,
                       f'{_meta_line(meta)}   |   Prices to {last}   |   '
                       f'Prepared by MICS International'])
@@ -257,8 +252,8 @@ def build_pptx(r, meta):
     rows = [['Stage and short-term trend', 'Value', '']] + [list(x) for x in stage_rows(r)]
     deck.table(s, X0, 1.85, [2.6, 1.35, 2.05], rows, size=10.5, rowh=0.38,
                aligns=['l', 'r', 'l'])
-    rows = [['The big swing', 'Value', '']] + [list(x) for x in now_rows(r)]
-    deck.table(s, 6.9, 1.85, [2.2, 1.35, 2.283], rows, size=10.5, rowh=0.38,
+    rows = [['The two stage triggers', 'Level', '']] + [list(x) for x in trigger_rows(r)]
+    deck.table(s, 6.9, 1.85, [1.9, 1.0, 2.933], rows, size=10, rowh=0.62,
                aligns=['l', 'r', 'l'])
 
     # what usually comes next
@@ -312,10 +307,13 @@ def build_pptx(r, meta):
     m = monthly(r)
     if len(m) > 12:
         series = [('Close', list(m.values), NAVY, 2, False)]
-        if cur.get('trigger'):
-            series.append(('Trigger that ends the big swing', [cur['trigger']] * len(m), GOLD,
-                           1.5, True))
         sgr = r.get('stage') or {}
+        if sgr and not sgr.get('error'):
+            for side, colour in (('up', UP), ('down', DOWN)):
+                g = sgr['current']['triggers'][side]
+                if g:
+                    series.append((f'{"Up" if side == "up" else "Down"} trigger: {g["name"]}',
+                                   [g['level']] * len(m), colour, 1.5, True))
         if sgr and not sgr.get('error'):
             ma = sgr['ma_daily'].reindex(m.index, method='ffill')
             if ma.notna().sum() > 12:
@@ -327,13 +325,13 @@ def build_pptx(r, meta):
             series.append(('Nearest resistance', [r['resistance']['low']] * len(m), DOWN, 1.25,
                            False))
         yrs = round((m.index[-1] - m.index[0]).days / 365.25)
-        s = deck.content(f'Price and every confirmed cycle, {yrs} years',
+        s = deck.content(f'Price, stage triggers and past turns, {yrs} years',
                          'Month end traded closes, adjusted for splits, not for dividends. The '
                          'levels are today\'s, drawn across the whole chart for reference.')
         deck.line_chart(s, X0, 1.85, 8.2, 4.95, [d.date() for d in m.index], series)
         pts = r['points'][-10:][::-1]
         rows = [['Turn', 'Date', 'Price', 'Confirmed']] + [
-            ['Peak' if p['kind'] == 'peak' else 'Trough', cpg.day(p['date']), _p(p['price']),
+            ['High' if p['kind'] == 'peak' else 'Low', cpg.day(p['date']), _p(p['price']),
              cpg.day(p['confirm_date'])] for p in pts]
         deck.table(s, 9.05, 1.9, [0.75, 1.1, 0.8, 1.033], rows, size=9.5, rowh=0.36,
                          aligns=['l', 'l', 'r', 'l'],
@@ -353,8 +351,8 @@ def build_pptx(r, meta):
     if n < cy.MIN_CYCLES:
         notes.append(f'Only {n} completed cycle(s). Below {cy.MIN_CYCLES}, these medians '
                      f'describe what happened rather than a reliable pattern.')
-    notes.append(f'{r["extremes"]} phase(s) marked extreme and left out of the shaded columns.'
-                 if r['extremes'] else 'No phase was extreme enough to leave out, so both sets '
+    notes.append(f'{r["extremes"]} move(s) marked extreme and left out of the shaded columns.'
+                 if r['extremes'] else 'No move was extreme enough to leave out, so both sets '
                  'of columns match.')
     c = r['clean']
     if c['hold_total']['n'] and c['bull_change']['n']:
@@ -372,10 +370,10 @@ def build_pptx(r, meta):
         chunk = phases[k:k + per]
         if not chunk:
             break
-        s = deck.content('Every completed phase' + (' (continued)' if k else ''),
+        s = deck.content('Every past major move' + (' (continued)' if k else ''),
                          f'Most recent first. Market-wide means the {r.get("bench_name") or "S&P 500"} also fell at least '
-                         f'{int(cy.MARKET_FALL * 100)}% inside the bear phase.')
-        rows = [['Phase', 'From', 'To', 'Start price', 'End price', 'Months', 'Change', 'Notes']]
+                         f'{int(cy.MARKET_FALL * 100)}% inside the fall.')
+        rows = [['Move', 'From', 'To', 'Start price', 'End price', 'Months', 'Change', 'Notes']]
         styles = {}
         for i, p in enumerate(chunk, 1):
             rows.append([p['kind'].title(), cpg.day(p['start']), cpg.day(p['end']),
@@ -391,8 +389,8 @@ def build_pptx(r, meta):
     for k in range(0, len(holds), per):
         chunk = holds[k:k + per]
         s = deck.content('Every holding period' + (' (continued)' if k else ''),
-                         'In on the close that confirmed a bull phase, out on the close that '
-                         'confirmed the next bear phase. Dividends counted as cash, not '
+                         'In on the close that confirmed a major rise, out on the close that '
+                         'confirmed the next major fall. Dividends counted as cash, not '
                          'reinvested.')
         rows = [['In on', 'At', 'Out on', 'At', 'Months', 'Price return', 'With dividends',
                  'Notes']]
@@ -444,16 +442,16 @@ def build_xlsx(r, meta):
     rr = book.heading(ws, rr, 'Stage and short-term trend')
     rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], stage_rows(r),
                     aligns=['left', 'right', 'left'])
+    rr = book.heading(ws, rr, 'The two stage triggers (2 weekly closes beyond the level)')
+    rr = book.table(ws, rr, ['Measure', 'Level', 'Detail'], trigger_rows(r),
+                    aligns=['left', 'right', 'left'], wrap_cols=(2,))
     rr = book.heading(ws, rr, 'What usually comes next, and what to watch')
     rr = book.table(ws, rr, ['Section', '', 'Detail'], outlook_rows(r),
                     aligns=['left', 'left', 'left'], wrap_cols=(2,))
     rr = book.heading(ws, rr, 'How much to trust this reading')
     rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], confidence_rows(r),
                     aligns=['left', 'right', 'left'], wrap_cols=(2,))
-    rr = book.heading(ws, rr, 'The big swing')
-    rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], now_rows(r),
-                    aligns=['left', 'right', 'left'])
-    rr = book.heading(ws, rr, 'Support, resistance and the rule')
+    rr = book.heading(ws, rr, 'Support, resistance and how past major moves are found')
     book.table(ws, rr, ['Measure', 'Value', 'Detail'], level_rows(r),
                aligns=['left', 'right', 'left'])
 
@@ -475,7 +473,7 @@ def build_xlsx(r, meta):
     ws = book.sheet('Typical cycle', widths=(36, 12, 12, 12, 9, 14, 12, 12, 9))
     rr = book.title(ws, 'A typical cycle for this stock',
                     'Medians and the middle half (25th to 75th percentile), with and without '
-                    'extreme phases. Shaded columns leave extremes out.')
+                    'extreme moves. Shaded columns leave extremes out.')
     rows = typical_rows(r, as_text=False)
     fm = {}
     for i, (_, key, kind) in enumerate(TYPICAL):
@@ -487,15 +485,15 @@ def build_xlsx(r, meta):
                formats=fm, col_fill={5: PALE, 6: PALE, 7: PALE, 8: PALE})
 
     # ---- Phases
-    ws = book.sheet('Phases', widths=(9, 13, 13, 12, 12, 9, 10, 26, 14, 14))
-    rr = book.title(ws, 'Every completed phase',
-                    'Oldest first. A phase runs from one confirmed turning point to the next.')
-    rows = [(p['kind'].title(), p['start'].date(), p['end'].date(), p['start_price'],
+    ws = book.sheet('Major moves', widths=(9, 13, 13, 12, 12, 9, 10, 26, 14, 14))
+    rr = book.title(ws, 'Every past major move',
+                    'Oldest first. A major move runs from one confirmed turning point to the next.')
+    rows = [('Rise' if p['kind'] == 'bull' else 'Fall', p['start'].date(), p['end'].date(), p['start_price'],
              p['end_price'], round(p['months'], 1), p['change'], phase_note(p))
             for p in r['phases']]
     styles = {(i, 6): {'color': UP if p['change'] > 0 else DOWN, 'bold': True}
               for i, p in enumerate(r['phases'])}
-    book.table(ws, rr, ['Phase', 'From', 'To', 'Start price', 'End price', 'Months', 'Change',
+    book.table(ws, rr, ['Move', 'From', 'To', 'Start price', 'End price', 'Months', 'Change',
                         'Notes'], rows, aligns=['left', 'left', 'left', 'right', 'right', 'right',
                                                 'right', 'left'],
                formats={1: 'dd mmm yyyy', 2: 'dd mmm yyyy', 3: PRICE, 4: PRICE, 5: '0.0', 6: PCT},
@@ -504,8 +502,8 @@ def build_xlsx(r, meta):
     # ---- Holding periods
     ws = book.sheet('Holding periods', widths=(13, 11, 13, 11, 9, 13, 11, 14, 11))
     rr = book.title(ws, 'Every holding period',
-                    'In on the close that confirmed a bull phase, out on the close that confirmed '
-                    'the next bear phase. Dividends counted as cash, not reinvested.')
+                    'In on the close that confirmed a major rise, out on the close that confirmed '
+                    'the next major fall. Dividends counted as cash, not reinvested.')
     rows = [(h['entry_date'].date(), h['entry'], h['exit_date'].date(), h['exit'],
              round(h['months'], 1), h['dividends'], h['price_return'], h['total_return'],
              'extreme' if h['extreme'] else '') for h in r['holdings']]
@@ -525,24 +523,29 @@ def build_xlsx(r, meta):
     rr = book.title(ws, 'Month end closes and today\'s levels',
                     'Traded prices adjusted for splits, not dividends. The levels are today\'s, '
                     'repeated down the column so they draw as lines.')
-    head = ['Month end', 'Close', 'Trigger', 'Support', 'Resistance']
-    rows = [(d.date(), float(v), cur.get('trigger'),
+    sgr = r.get('stage') or {}
+    trig = ({'up': None, 'down': None} if not sgr or sgr.get('error') else
+            sgr['current']['triggers'])
+    up_l = trig['up']['level'] if trig['up'] else None
+    dn_l = trig['down']['level'] if trig['down'] else None
+    head = ['Month end', 'Close', 'Up trigger', 'Down trigger', 'Support', 'Resistance']
+    rows = [(d.date(), float(v), up_l, dn_l,
              r['support']['high'] if r['support'] else None,
              r['resistance']['low'] if r['resistance'] else None) for d, v in m.items()]
     first = rr + 1
     book.table(ws, rr, head, rows, formats={0: 'mmm yyyy', 1: PRICE, 2: PRICE, 3: PRICE,
-                                            4: PRICE})
+                                            4: PRICE, 5: PRICE})
     if len(rows) > 2:
         ch = LineChart()
         ch.title = f'{name}, month end close'
         ch.height, ch.width = 11, 26
         ch.y_axis.title, ch.x_axis.number_format = 'Price', 'mmm yy'
-        data = Reference(ws, min_col=2, max_col=5, min_row=first - 1, max_row=first + len(rows) - 1)
+        data = Reference(ws, min_col=2, max_col=6, min_row=first - 1, max_row=first + len(rows) - 1)
         ch.add_data(data, titles_from_data=True)
         ch.set_categories(Reference(ws, min_col=1, min_row=first, max_row=first + len(rows) - 1))
-        for ser, colour, width, dash in zip(ch.series, (NAVY, GOLD, UP, DOWN),
-                                            (28000, 19000, 16000, 16000),
-                                            (None, 'dash', None, None)):
+        for ser, colour, width, dash in zip(ch.series, (NAVY, UP, DOWN, UP, DOWN),
+                                            (28000, 19000, 19000, 12000, 12000),
+                                            (None, 'sysDot', 'sysDot', None, None)):
             ser.graphicalProperties.line.solidFill = colour
             ser.graphicalProperties.line.width = width
             ser.smooth = False
@@ -551,12 +554,19 @@ def build_xlsx(r, meta):
         ws.add_chart(ch, 'G4')
 
     # ---- Daily closes with the phase each day sat in
-    ws = book.sheet('Daily closes', widths=(13, 12, 24))
-    rr = book.title(ws, 'Every daily close used', 'Traded prices, and the phase each day '
+    ws = book.sheet('Daily closes', widths=(13, 12, 26, 18))
+    rr = book.title(ws, 'Every daily close used', 'Traded prices, the stage of each week, and '
+                    'the past major move each day '
                     'belongs to once its turning points were confirmed.')
-    ph = daily_phase(r)
-    rows = [(d.date(), float(v), ph[d]) for d, v in r['close'].items()]
-    book.table(ws, rr, ['Date', 'Close', 'Phase'], rows, aligns=['left', 'right', 'left'],
+    ph, stg = daily_phase(r)
+    def stage_name(d):
+        if stg is None or pd.isna(stg.get(d)):
+            return ''
+        k = int(stg[d])
+        return f'{k}, {cpg.sg.NAMES[k]}'
+    rows = [(d.date(), float(v), ph[d], stage_name(d)) for d, v in r['close'].items()]
+    book.table(ws, rr, ['Date', 'Close', 'Past major move', 'Stage'], rows,
+               aligns=['left', 'right', 'left', 'left'],
                formats={0: 'dd mmm yyyy', 1: PRICE})
 
     # ---- Definitions and limitations

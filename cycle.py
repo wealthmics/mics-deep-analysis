@@ -393,17 +393,20 @@ def data_checks(close, today=None):
 
 
 def confidence_of(r):
-    """How much weight the reading can bear: High, Medium or Low, with the reasons.
+    """How much weight the stage reading can bear: High, Medium or Low, with the reasons.
 
-    Low when the data itself is suspect. Medium when the reading is sound but thin or
-    unsettled: few past phases to compare with, the price close to the trigger, or the
-    trend pointing against the phase."""
-    cur, st = r['current'], r['status']
+    Low when the price data itself is suspect. Medium when the reading is sound but thin
+    or unsettled: little stage history to learn from, a breakout still being tested, the
+    price close to a level that would change the stage, or the current week reading
+    differently from the last finished one."""
     low, medium = [], []
+    for c in r['checks']:
+        if c['level'] == 'warn':
+            low.append(c['text'])
     sgr = r.get('stage') or {}
-    if sgr.get('error'):
+    if sgr.get('error') or not sgr:
         medium.append('not enough weekly history for a stage reading')
-    elif sgr:
+    else:
         sc = sgr['current']
         total = sum(sgr['stats'][sc['stage']]['next'].values())
         if total < sg.MIN_CASES:
@@ -415,30 +418,13 @@ def confidence_of(r):
             word = 'breakout' if t['dir'] == 'up' else 'breakdown'
             medium.append(f'the {word} of the week of {t["week"]:%d %b %Y} is still being '
                           f'tested and could fail back to Stage {t["from"]}')
+        for g in sc['triggers'].values():
+            if g and abs(g['distance']) <= NEAR_TRIGGER:
+                medium.append(f'the price is within {NEAR_TRIGGER * 100:.0f}% of the level that '
+                              f'would turn it to {g["name"]}')
         run = sc.get('running')
         if run and run['raw'] and run['raw'] != sc['raw']:
             medium.append('this week so far reads differently from the last finished week')
-        if cur.get('state') and ((sc['stage'] == 4 and cur['state'] == 'bull') or
-                                 (sc['stage'] == 2 and cur['state'] == 'bear')):
-            medium.append(f'the stage (Stage {sc["stage"]}) and the big {cur["state"]} swing point '
-                          f'opposite ways: the move has turned but not yet far enough to end '
-                          f'the big swing')
-    for c in r['checks']:
-        if c['level'] == 'warn':
-            low.append(c['text'])
-    if cur.get('state'):
-        key = 'bull_months' if cur['state'] == 'bull' else 'bear_months'
-        n = r['all'][key]['n']
-        if n < MIN_CYCLES:
-            medium.append(f'{"no completed big " + cur["state"] + " swing" if n == 0 else "only " + str(n) + " completed big " + cur["state"] + " swing" + ("s" if n != 1 else "")} '
-                          f'in the record to compare with')
-        if st['near']:
-            medium.append(f'the price is within {NEAR_TRIGGER * 100:.0f}% of the level that '
-                          f'ends the big {cur["state"]} swing, so it could change on any day')
-    else:
-        medium.append('no big swing has been confirmed yet')
-    if r['trend'] is None:
-        medium.append('not enough history for a 200-day trend')
     level = 'Low' if low else 'Medium' if medium else 'High'
     return {'level': level, 'reasons': low + medium}
 
@@ -583,7 +569,6 @@ def analyse(hist, bench=None, threshold=None, bench_name=None, today=None,
          'fall': fall_for(threshold)}
     r['stage'] = sg.analyse(close, today)
     if not r['stage'].get('error'):
-        r['outlook'] = sg.outlook(r['stage'], current if current.get('state') else None,
-                                  support, resistance)
+        r['outlook'] = sg.outlook(r['stage'], support, resistance)
     r['confidence'] = confidence_of(r)
     return r

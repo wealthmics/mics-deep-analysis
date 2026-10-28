@@ -60,17 +60,17 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
               marks=(), width=720, height=290):
     """Price on a log scale, so a 30% fall looks the same size at 10 as at 1,000.
 
-    Bear phases are shaded, peaks and troughs marked, the nearest support and resistance
-    zones drawn as bands and the current trigger as a dashed line. Dates run evenly across
-    the width, so the markers and the line share one time axis.
+    Past turning points are marked, the nearest support and resistance zones drawn as
+    bands, the two stage triggers as dotted lines from the start of the current stage, and
+    the stage of every week as a strip along the bottom. Dates run evenly across the width,
+    so the markers and the line share one time axis.
     """
     s = rk.thin_series(close)
     t0, t1 = s.index[0], s.index[-1]
     span_t = max(1, (t1 - t0).days)
     levels = [float(v) for v in s.values]
     extra = [z['low'] for z, _, _ in zones] + [z['high'] for z, _, _ in zones]
-    if current.get('trigger'):
-        extra.append(current['trigger'])
+    extra += [m[1] for m in marks]
     lo = math.log(min(levels + extra))
     hi = math.log(max(levels + extra))
     rng = (hi - lo) or 1
@@ -89,17 +89,6 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
         yy = top + frac * usable
         parts.append(f'<line x1="0" y1="{yy:.0f}" x2="{width}" y2="{yy:.0f}" stroke="#e9edf3"/>')
 
-    # bear phases, completed and open, clipped to the window
-    spans = [(p['start'], p['end']) for p in phases if p['kind'] == 'bear']
-    if current.get('state') == 'bear' and current.get('start') is not None:
-        spans.append((current['start'], current['last_date']))
-    for a, b in spans:
-        if b < t0 or a > t1:
-            continue
-        xa, xb = x(max(a, t0)), x(min(b, t1))
-        parts.append(f'<rect x="{xa:.1f}" y="0" width="{max(1, xb - xa):.1f}" '
-                     f'height="{height}" fill="{BEAR_FILL}"/>')
-
     # A zone built from one turning point has no height of its own, which drew it as a
     # hairline nobody could see. Each zone is now at least 10 units tall, centred on its
     # levels, with a solid line in its own colour along the level itself.
@@ -114,11 +103,6 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
         parts.append(f'<line x1="0" y1="{level:.1f}" x2="{width}" y2="{level:.1f}" '
                      f'stroke="{edge}" stroke-width="1.6"/>')
 
-    if current.get('trigger'):
-        yt = y(current['trigger'])
-        parts.append(f'<line x1="0" y1="{yt:.1f}" x2="{width}" y2="{yt:.1f}" stroke="{GOLD}" '
-                     f'stroke-width="1.4" stroke-dasharray="6,4"/>')
-
     for series, colour, dash in lines:
         if series is None:
             continue
@@ -129,14 +113,12 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
             parts.append(f'<polyline fill="none" stroke="{colour}" stroke-width="1.4" '
                          + (f'stroke-dasharray="{dash}" ' if dash else '') + f'points="{ap}"/>')
 
-    # levels of a breakout still being tested, from the breakout week on
+    # the two stage triggers, from the start of the current stage on
     for start, level, colour, label in marks:
-        if not (math.exp(lo) < level < math.exp(hi)):
-            continue
         xa = x(max(pd.Timestamp(start), t0))
         parts.append(f'<line x1="{xa:.1f}" x2="{width:.1f}" y1="{y(level):.1f}" '
-                     f'y2="{y(level):.1f}" stroke="{colour}" stroke-width="1.3" '
-                     f'stroke-dasharray="1,3"><title>{esc(label)}: {px(level)}</title></line>')
+                     f'y2="{y(level):.1f}" stroke="{colour}" stroke-width="1.8" '
+                     f'stroke-dasharray="2,3"><title>{esc(label)}</title></line>')
 
     # the stage of every week, as a strip along the bottom
     for e in stage_eps:
@@ -158,10 +140,10 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
         cx, cyy = x(p['date']), y(p['price'])
         if p['kind'] == 'peak':
             tri = f'{cx - 5:.1f},{cyy - 9:.1f} {cx + 5:.1f},{cyy - 9:.1f} {cx:.1f},{cyy - 2:.1f}'
-            colour, word = DOWN, 'Peak'
+            colour, word = DOWN, 'Turning high'
         else:
             tri = f'{cx - 5:.1f},{cyy + 9:.1f} {cx + 5:.1f},{cyy + 9:.1f} {cx:.1f},{cyy + 2:.1f}'
-            colour, word = UP, 'Trough'
+            colour, word = UP, 'Turning low'
         parts.append(f'<polygon points="{tri}" fill="{colour}"><title>{word} {day(p["date"])} '
                      f'at {px(p["price"])}, confirmed {day(p["confirm_date"])}</title></polygon>')
 
@@ -213,30 +195,27 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
         word = 'Support' if edge == UP else 'Resistance'
         tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:{edge};'
                  f'border-color:{edge}">{word} {px(level)}</span>')
-    if current.get('trigger'):
-        top_pct = max(0.0, min(100.0, y(current['trigger']) / height * 100))
-        tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:#8a6300;'
-                 f'border-color:{GOLD};left:auto;right:58px">Trigger {px(current["trigger"])}</span>')
+    for _, level, colour, label in marks:
+        top_pct = max(0.0, min(100.0, y(level) / height * 100))
+        tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:{colour};'
+                 f'border-color:{colour};left:auto;right:58px">{esc(label)}</span>')
     return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{"".join(parts)}{tags}</div>'
             f'<div class="xaxis">{"".join(dates)}</div>')
 
 
 LEGEND = (f'<div class="clegend">'
           f'<span><i style="background:{NAVY};height:3px"></i>Close, log scale</span>'
-          f'<span><i style="background:{BEAR_FILL};height:10px"></i>Big bear swing</span>'
           f'<span><i style="background:{EMA_LINE};height:2px"></i>50-day EMA</span>'
           f'<span><i style="background:repeating-linear-gradient(90deg,{TREND_LINE} 0 4px,'
           f'transparent 4px 7px)"></i>30-week average (stage line)</span>'
           + ''.join(f'<span><i style="background:{STAGE_FILL[k]};height:10px"></i>Stage {k}, '
                     f'{sg.NAMES[k]}</span>' for k in (1, 2, 3, 4)) +
-          f'<span><b style="color:{DOWN}">&#9660;</b>Peak</span>'
-          f'<span><b style="color:{UP}">&#9650;</b>Trough</span>'
+          f'<span><b style="color:{DOWN}">&#9660;</b>Past turning high</span>'
+          f'<span><b style="color:{UP}">&#9650;</b>Past turning low</span>'
           f'<span><i style="background:{SUPPORT_FILL};height:10px;border-top:2px solid {UP}">'
           f'</i>Nearest support</span>'
           f'<span><i style="background:{RESIST_FILL};height:10px;border-bottom:2px solid {DOWN}">'
-          f'</i>Nearest resistance</span>'
-          f'<span><i style="background:repeating-linear-gradient(90deg,{GOLD} 0 6px,'
-          f'transparent 6px 10px)"></i>Trigger that ends the current phase</span></div>')
+          f'</i>Nearest resistance</span></div>')
 
 
 def chart_lines(r):
@@ -246,31 +225,46 @@ def chart_lines(r):
     return ((sgr['short']['ema'], EMA_LINE, None), (sgr['ma_daily'], TREND_LINE, '4,3'))
 
 
-def testing(r):
+def stage_triggers(r):
     sgr = r.get('stage') or {}
-    return None if not sgr or sgr.get('error') else sgr['current'].get('testing')
+    if not sgr or sgr.get('error'):
+        return {'up': None, 'down': None}
+    return sgr['current']['triggers']
 
 
-def test_marks(r):
-    t = testing(r)
-    if not t:
+def trigger_label(g, side):
+    arrow = '&#9650;' if side == 'up' else '&#9660;'
+    return f'{arrow} {g["name"]} {"above" if side == "up" else "below"} {px(g["level"])}'
+
+
+def trigger_marks(r):
+    sgr = r.get('stage') or {}
+    if not sgr or sgr.get('error'):
         return ()
-    word = 'breakout' if t['dir'] == 'up' else 'breakdown'
-    good, bad = (UP, DOWN) if t['dir'] == 'up' else (DOWN, UP)
-    return ((t['week'], t['proof'], good, f'{word.title()} proven beyond'),
-            (t['week'], t['fail'], bad, f'{word.title()} fails beyond'))
+    start = sgr['current']['start']
+    out = []
+    for side, colour in (('up', UP), ('down', DOWN)):
+        g = sgr['current']['triggers'][side]
+        if g:
+            plain_label = (f'{"Up" if side == "up" else "Down"} to {g["name"]}: '
+                           f'{"above" if side == "up" else "below"} {px(g["level"])}')
+            out.append((start, g['level'], colour, plain_label))
+    return tuple(out)
 
 
-def test_legend(r):
-    t = testing(r)
-    if not t:
+def trigger_legend(r):
+    trig = stage_triggers(r)
+    spans = []
+    for side, colour in (('up', UP), ('down', DOWN)):
+        g = trig[side]
+        if g:
+            spans.append(f'<span><i style="background:repeating-linear-gradient(90deg,{colour} 0 '
+                         f'2px,transparent 2px 5px);height:2px"></i>{trigger_label(g, side)}'
+                         f'{" (moves weekly)" if g["moves"] else ""}</span>')
+    if not spans:
         return ''
-    word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
-    good, bad = (UP, DOWN) if t['dir'] == 'up' else (DOWN, UP)
-    dots = 'repeating-linear-gradient(90deg,{} 0 1px,transparent 1px 4px)'
-    return (f'<div class="clegend"><span><i style="background:{dots.format(good)}"></i>{word} '
-            f'proven beyond {px(t["proof"])}</span><span><i style="background:'
-            f'{dots.format(bad)}"></i>{word} fails beyond {px(t["fail"])}</span></div>')
+    return ('<div class="clegend"><span><b>Stage triggers</b> (2 weekly closes)</span>'
+            + ''.join(spans) + '</div>')
 
 
 def stage_eps(r):
@@ -303,13 +297,14 @@ def chart_card(r):
                     f'class="si-{lab}">{word}</label>')
         panels.append(f'<div class="spanpanel sp-{lab}{on}">'
                       + svg_cycle(win, r['points'], cur, r['phases'], shown, chart_lines(r),
-                                  stage_eps(r), stage_daily(r), test_marks(r)) + '</div>')
-    body = (LEGEND + test_legend(r) + f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
+                                  stage_eps(r), stage_daily(r), trigger_marks(r)) + '</div>')
+    body = (LEGEND + trigger_legend(r) + f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
             f'{"".join(panels)}</div>'
-            '<div class="smallnote">Hover over the chart for the date, close and stage. Hover over '
-            'a marker for the turning point and the day it was confirmed, and over the strip '
-            'along the bottom for each stage\'s dates.</div>')
-    return card('Price and every confirmed cycle', body,
+            '<div class="smallnote">Hover over the chart for the date, close and stage, over a '
+            'marker for a past turning point, and over the strip along the bottom for each '
+            'stage\'s dates. The dotted lines are the levels that would change the stage, drawn '
+            'from the week the current stage began.</div>')
+    return card('Price, stages and the two triggers', body,
                 f'{day(r["first_date"])} to {day(r["last_date"])}. Traded prices, adjusted '
                 f'for splits, not for dividends.')
 
@@ -342,62 +337,7 @@ def stage_reading(r):
 
 
 def reading(r):
-    return stage_reading(r) + ' <br><br>' + swing_reading(r)
-
-
-def swing_reading(r):
-    cur, T = r['current'], r['threshold']
-    if not cur.get('state'):
-        return (f'No big swing yet. Since {day(r["first_date"])} the price has not moved '
-                f'{pct(T, False)} from any high or low, which is the move this stock needs to '
-                f'start or end a big swing.')
-    st = r['status']
-    if cur['state'] == 'bull':
-        s = (f'Big swing: <b>{st["label"]}</b>, since the {day(cur["start"])} low of {px(cur["start_price"])}, '
-             f'confirmed on {day(cur["confirm_date"])}. The latest close of '
-             f'{px(cur["last_price"])} is {pct(-cur["from_extreme"], False)} below the '
-             f'{px(cur["extreme"])} high, and the swing ends on a close below '
-             f'<b>{px(cur["trigger"])}</b>.')
-        key, word = 'bull_months', 'bull'
-    else:
-        s = (f'Big swing: <b>{st["label"]}</b>, since the {day(cur["start"])} high of {px(cur["start_price"])}, '
-             f'confirmed on {day(cur["confirm_date"])}. The latest close of '
-             f'{px(cur["last_price"])} is {pct(cur["from_extreme"], False)} above the '
-             f'{px(cur["extreme"])} low, and the swing ends on a close above '
-             f'<b>{px(cur["trigger"])}</b>.')
-        key, word = 'bear_months', 'bear'
-    if st['qualifier']:
-        if cur['state'] == 'bull':
-            s += (' The big bull swing has not ended, but the price is moving against it: '
-                  + ', and '.join(st['reasons']) + '.')
-        else:
-            s += (' The big bear swing has not ended, but the price is moving against it: '
-                  + ', and '.join(st['reasons']) + '.')
-    if st['near']:
-        s += (f' The latest close is within {pct(abs(cur["to_trigger"]), False)} of that level, '
-              f'so the big swing could change on any day.')
-    basis, dropped = compare_basis(r, key)
-    if basis['n']:
-        share = cur['months'] / basis['median'] if basis['median'] else None
-        ex = f', {dropped} extreme swing{"s" if dropped != 1 else ""} excluded' if dropped else ''
-        typ = (f'{mo(basis["median"])}, median of {basis["n"]} '
-               f'swing{"s" if basis["n"] != 1 else ""}{ex}')
-        if share is not None and share >= 1:
-            s += (f' At {mo(cur["months"])}, it is already longer than a typical big {word} '
-                  f'swing for this stock ({typ}).')
-        elif share is not None:
-            s += (f' At {mo(cur["months"])}, it has run {share * 100:.0f}% of the length of a '
-                  f'typical big {word} swing for this stock ({typ}).')
-        if basis['n'] < cy.MIN_CYCLES:
-            s += (f' With only {basis["n"]} completed big {word} swing'
-                  f'{"s" if basis["n"] != 1 else ""} to compare against, read this as a '
-                  f'description of the past rather than a pattern.')
-    else:
-        s += f' There is no completed big {word} swing yet to compare it with.'
-    if r['confidence']['level'] == 'Low':
-        s += (' <b>Data warning:</b> the price history has problems that could make this '
-              'reading wrong. See "How much to trust this reading".')
-    return s
+    return stage_reading(r)
 
 
 # ---------------------------------------------------------------- rail -------------------
@@ -417,9 +357,9 @@ def trust_card(r):
         rows.append('<div class="body-text">' + '</div><div class="body-text">'.join(
             esc(x[0].upper() + x[1:]).rstrip('.') + '.' for x in conf['reasons']) + '</div>')
     else:
-        rows.append('<div class="body-text">The data passed every check, there are enough past '
-                    'phases to compare with, the price is not close to the trigger and the '
-                    'trend agrees with the phase.</div>')
+        rows.append('<div class="body-text">The data passed every check, there is enough stage '
+                    'history to learn from, no breakout is being tested and the price is not '
+                    'close to either trigger.</div>')
     note = ('High means the data is clean and the reading is settled. Medium means the reading '
             'is sound but thin or unsettled. Low means the data itself may be wrong; check the '
             'price history before using any figure.')
@@ -450,16 +390,22 @@ def now_card(r):
                          f'{day(sh["cross_date"])}')
             rows.append(kv('50-day EMA vs 200-day', 'above' if sh['ema_over_sma'] else 'below',
                            cross))
+        for side in ('up', 'down'):
+            g = c['triggers'][side]
+            arrow = '&#9650;' if side == 'up' else '&#9660;'
+            if g:
+                rows.append(kv(f'{arrow} Turns to {g["name"]}', px(g['level']),
+                               f'{pct(g["distance"])} away'
+                               + (', moves weekly' if g['moves'] else '')))
+            else:
+                rows.append(kv(f'{arrow} {"Upside" if side == "up" else "Downside"}', 'no change',
+                               'the stage would only continue'))
         t = c.get('testing')
         if t:
             word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
-            up = t['dir'] == 'up'
-            rows += [kv(f'{word} level', px(t['pivot']), f'from Stage {t["from"]}, week of '
-                                                         f'{day(t["week"])}'),
-                     kv(f'{word} proven {"above" if up else "below"}', px(t['proof']),
-                        f'or by {day(t["deadline"])}'),
-                     kv(f'{word} fails {"below" if up else "above"}', px(t['fail']),
-                        f'{sg.CONFIRM_WEEKS} weekly closes, back to Stage {t["from"]}')]
+            rows.append(kv(f'{word} being tested', px(t['pivot']),
+                           f'proven {"above" if t["dir"] == "up" else "below"} '
+                           f'{px(t["proof"])} or on {day(t["deadline"])}'))
         rows += [kv('From 52-week high', pct(sh['from_high52']), px(sh['high52'])),
                  kv('From 52-week low', pct(sh['from_low52']), px(sh['low52']))]
         run = c.get('running')
@@ -469,38 +415,10 @@ def now_card(r):
         rows.append(kv('Confidence', r['confidence']['level'], 'see the card below'))
     else:
         rows.insert(0, kv('Stage', 'n/a', (sgr or {}).get('error', '')))
-    note = ('The stage is read on finished weeks only and changes after two weeks in a row '
-            'point the same way, so one odd week cannot flip it.')
+    note = ('The stage is read on finished weeks only. Each trigger needs two weekly closes in '
+            'a row beyond its level, so one odd week cannot flip it. The 50-day EMA is an early '
+            'warning, not a trigger.')
     return card('Where the stock is now', ''.join(rows) + f'<div class="cnote">{note}</div>')
-
-
-def swing_card(r):
-    """The big swing from cycle.py: slow by design, the frame for the history below."""
-    cur = r['current']
-    if not cur.get('state'):
-        return card('The big swing', '<div class="body-text">No big swing has been confirmed '
-                    'yet.</div>')
-    bull = cur['state'] == 'bull'
-    need = r['fall'] if bull else r['threshold']
-    rows = [kv('Big swing', r['status']['label'], 'confirmed'),
-            kv('Started', px(cur['start_price']), f'{"low" if bull else "high"} on '
-               f'{day(cur["start"])}'),
-            kv('Confirmed', px(cur['confirm_price']), f'close on {day(cur["confirm_date"])}'),
-            kv('Length so far', mo(cur['months'])),
-            kv(f'{"Highest" if bull else "Lowest"} close since', px(cur['extreme']),
-               day(cur['extreme_date'])),
-            kv('From the high' if bull else 'From the low', pct(cur['from_extreme']),
-               f'{abs(cur["from_extreme"]) / need * 100:.0f}% of the {pct(need, False)} '
-               f'{"fall" if bull else "rise"} that ends it'),
-            kv(f'Ends on a close {"below" if bull else "above"}', px(cur['trigger']),
-               f'{"high minus" if bull else "low plus"} {pct(need, False)}'),
-            kv('Distance to that level', pct(cur['to_trigger']))]
-    if bull and cur.get('held_return') is not None:
-        rows.append(kv('Held since confirmation', pct(cur['held_return']),
-                       f'{mo(cur["held_months"])}, dividends included'))
-    note = ('The big swing changes only on a large move, so it dates past cycles cleanly but '
-            'turns late. The stage above is the reading for now.')
-    return card('The big swing', ''.join(rows) + f'<div class="cnote">{note}</div>')
 
 
 def outlook_card(r):
@@ -605,7 +523,7 @@ def levels_card(r):
     rows.append(zone_rows(r['resistance'], 'Nearest resistance') if r['resistance'] else
                 kv('Nearest resistance', 'none', 'no past turn above the price'))
     note = ('A zone is a band no wider than 4% where past peaks or troughs cluster. It held each '
-            'time the price turned inside it, and broke each time a later phase ran straight '
+            'time the price turned inside it, and broke each time a later major move ran straight '
             'through it. These are levels where the price has turned before, not floors or '
             'ceilings.')
     return card('Support and resistance', ''.join(rows) + f'<div class="cnote">{note}</div>')
@@ -626,21 +544,22 @@ def rule_card(r):
         else:
             how = base
     done = len(r['phases'])
-    return card('The rule for this stock',
-                kv('Threshold', pct(r['threshold'], False), how)
+    return card('How past major moves are found',
+                kv('Rise size', pct(r['threshold'], False), how)
+                + kv('Fall size', pct(r['fall'], False), 'the same move in log terms')
                 + kv('History used', f'{years:.1f} years', f'from {day(r["first_date"])}')
                 + kv('Confirmed turning points', str(len(r['points'])))
-                + kv('Completed phases', str(done),
+                + kv('Completed major moves', str(done),
                      f'{r["extremes"]} extreme' if r['extremes'] else 'none extreme'))
 
 
 # ---------------------------------------------------------------- main column ------------
 def typical_card(r):
     a, c = r['all'], r['clean']
-    rows = [('Bull phase length', 'bull_months', 'months', 'trough to peak'),
-            ('Bull phase gain', 'bull_change', 'pct', 'trough to peak, price only'),
-            ('Bear phase length', 'bear_months', 'months', 'peak to trough'),
-            ('Bear phase fall', 'bear_change', 'pct', 'peak to trough, price only'),
+    rows = [('Major rise length', 'bull_months', 'months', 'turning low to turning high'),
+            ('Major rise gain', 'bull_change', 'pct', 'low to high, price only'),
+            ('Major fall length', 'bear_months', 'months', 'turning high to turning low'),
+            ('Major fall size', 'bear_change', 'pct', 'high to low, price only'),
             ('Holding period', 'hold_months', 'months', 'confirmation to confirmation'),
             ('Captured return', 'hold_total', 'pct', 'confirmation to confirmation, '
              'dividends included')]
@@ -674,17 +593,17 @@ def typical_card(r):
                      f'{cy.MIN_CYCLES}, these medians describe what happened rather than a '
                      f'reliable pattern.')
     if r['extremes']:
-        notes.append(f'{r["extremes"]} phase{"s are" if r["extremes"] != 1 else " is"} '
+        notes.append(f'{r["extremes"]} move{"s are" if r["extremes"] != 1 else " is"} '
                      f'marked extreme and left out of the right-hand columns. They are still '
                      f'shown in the history below.')
     else:
-        notes.append('No phase was far enough from the rest to count as extreme, so both '
+        notes.append('No move was far enough from the rest to count as extreme, so both '
                      'sets of columns match.' if a['bull_months']['n'] >= cy.MIN_CYCLES else
                      'Extremes are only judged once a stock has at least five completed '
-                     'phases of a kind, so nothing has been excluded.')
+                     'major moves of a kind, so nothing has been excluded.')
     if c['hold_total']['n'] and c['bull_change']['n']:
         notes.append(f'The median captured return of {pct(c["hold_total"]["median"])} compares '
-                     f'with a median trough to peak gain of {pct(c["bull_change"]["median"])}. '
+                     f'with a median low to high gain of {pct(c["bull_change"]["median"])}. '
                      f'The difference is the cost of waiting for each turn to be confirmed, '
                      f'and the captured return is the honest figure for anyone following the '
                      f'rule.')
@@ -707,24 +626,24 @@ def tag(p):
 
 def history_card(r):
     if not r['phases']:
-        return card('Every completed phase', '<div class="body-text">None yet. A phase is '
+        return card('Every past major move', '<div class="body-text">None yet. A major move is '
                     'complete once the turn that ends it has been confirmed.</div>')
-    rows = ['<table class="nw"><thead><tr><th>Phase</th><th>From</th><th>To</th><th>Start price</th>'
+    rows = ['<table class="nw"><thead><tr><th>Move</th><th>From</th><th>To</th><th>Start price</th>'
             '<th>End price</th><th>Months</th><th>Change</th><th>Notes</th></tr></thead><tbody>']
     for p in reversed(r['phases']):
         cls = 'up' if p['kind'] == 'bull' else 'down'
-        rows.append(f'<tr><td class="lab">{p["kind"].title()}</td><td>{day(p["start"])}</td>'
+        rows.append(f'<tr><td class="lab">{"Rise" if p["kind"] == "bull" else "Fall"}</td><td>{day(p["start"])}</td>'
                     f'<td>{day(p["end"])}</td><td>{px(p["start_price"])}</td>'
                     f'<td>{px(p["end_price"])}</td><td>{p["months"]:.1f}</td>'
                     f'<td class="val {cls}">{pct(p["change"])}</td><td>{tag(p)}</td></tr>')
     rows.append('</tbody></table>')
     bn = esc(r.get('bench_name') or 'S&P 500')
-    sub = (f'Most recent first. A bear phase is marked market-wide when the {bn}, this '
+    sub = (f'Most recent first. A fall is marked market-wide when the {bn}, this '
            f'listing\'s own market, also fell at least {int(cy.MARKET_FALL * 100)}% inside it, '
            'and stock-specific when it did not.' if r['bench_ok'] else
-           f'Most recent first. The {bn} did not load, so bear phases are not tagged as '
+           f'Most recent first. The {bn} did not load, so falls are not tagged as '
            'market-wide or stock-specific.')
-    return card('Every completed phase', ''.join(rows), sub)
+    return card('Every past major move', ''.join(rows), sub)
 
 
 def holdings_card(r):
@@ -741,8 +660,8 @@ def holdings_card(r):
                     f'<td>{h["months"]:.1f}</td><td>{pct(h["price_return"])}</td>'
                     f'<td class="val {cls}">{pct(h["total_return"])}</td><td>{note}</td></tr>')
     rows.append('</tbody></table>')
-    sub = ('In on the close that confirmed a bull phase, out on the close that confirmed the '
-           'next bear phase. Dividends are counted as cash received, not reinvested.'
+    sub = ('In on the close that confirmed a major rise, out on the close that confirmed the '
+           'next major fall. Dividends are counted as cash received, not reinvested.'
            + ('' if r['has_dividends'] else ' Yahoo shows no dividends for this stock, so both '
               'return columns are the same.'))
     return card('Every holding period', ''.join(rows), sub)
@@ -755,9 +674,15 @@ DEFINITIONS = [
      'above a rising average, down when below a falling one, neutral otherwise. The stage '
      'changes after two weeks in a row point the same way: from 2, weeks that stop reading up '
      'give 3 (or 4 if both read down); from 4, weeks that stop reading down give 1 (or 2 if '
-     'both read up); from 1 or 3, two up weeks give 2 and two down weeks give 4, but only once the close '
-     'also breaks out of that base or top: above its highest weekly close, or below its '
-     'lowest, counting the 13 weeks before it began.'),
+     'both read up); from 1 or 3, two up weeks give 2 and two down weeks give 4, but only once '
+     'the close also breaks out of that base or top: above its highest weekly close, or below '
+     'its lowest, counting the 13 weeks before it began.'),
+    ('Stage triggers', 'The two levels that would change the stage, one up and one down.',
+     'The nearest stage-changing level on each side of the price, with the stage it leads to. '
+     'In a base or top: its top and bottom. In Stage 2 or 4: the 30-week average (which moves '
+     'weekly), or, while a breakout is being tested, the level that would fail it. Each needs '
+     'two weekly closes in a row beyond it. Stage 2 has no upside trigger and Stage 4 no '
+     'downside one, because those moves only continue the stage.'),
     ('Breakout and its test', 'A move out of a base or top, checked before it is trusted.',
      'When Stage 1 or 3 turns into Stage 2 or 4, the edge of the range it left is the '
      'breakout level. The move is proven by a weekly close one range-height beyond that level, '
@@ -769,7 +694,7 @@ DEFINITIONS = [
      'The average of the last 30 weekly closes. It counts as flat while its five-week change '
      'is smaller than a quarter of the stock\'s own five-week volatility, and never less than '
      '0.5%.'),
-    ('50-day EMA', 'The short-term trend, the first line to break when a stage is changing.',
+    ('50-day EMA', 'The short-term trend. An early warning, not a trigger.',
      'Exponential average of daily closes with a span of 50 days.'),
     ('Golden / death cross', 'The 50-day EMA crossing the 200-day average.',
      'Golden when it crosses above, death when it crosses below. Shown with the date of the '
@@ -777,45 +702,36 @@ DEFINITIONS = [
     ('What came next', 'How this stock\'s past stages ended and what the price did after.',
      'For every past stage of the same kind: which stage followed, and the price 13 and 26 '
      'weeks after the stage began, with the number of cases.'),
-    ('Big swing', 'The large bull or bear moves used for the history and holding periods.',
-     'A bull swing ends on a close the fall threshold below its highest close; a bear swing '
-     'ends on a close the rise threshold above its lowest close.'),
-    ('Rise and fall thresholds', 'The size of move that changes the big swing.',
-     'The rise threshold is the median annual volatility over each of the last five years, '
-     'kept between 15% and 35%. The fall threshold is the same move in log terms, rise / (1 + '
-     'rise), so a 35% rise threshold pairs with a 25.9% fall.'),
-    ('Correcting / rebounding', 'A big swing the price is currently moving against.',
-     'Marked when the price has moved back at least half the threshold from the swing\'s '
-     'extreme, or when the 200-day trend points against the swing.'),
-    ('Confidence', 'How much weight the reading can bear.',
-     'Low if any data check failed. Medium if the stage history is thin, this week reads '
-     'differently from the last finished week, the big swing has few past cases or is close '
-     'to its trigger, or no swing is confirmed. High otherwise.'),
-    ('Peak', 'The high of a big bull swing. Only known in hindsight.',
-     'The highest close before a fall of at least the fall threshold.'),
-    ('Trough', 'The low of a big bear swing. Only known in hindsight.',
-     'The lowest close before a rise of at least the rise threshold.'),
-    ('Confirmation date', 'The day a swing change became certain.',
-     'The first close beyond the last peak or trough by the relevant threshold.'),
-    ('Trigger', 'The close that would end the current big swing.',
-     'In a bull swing, the highest close since the trough times one minus the fall threshold. '
-     'In a bear swing, the lowest close since the peak times one plus the rise threshold.'),
-    ('Bull / bear phase length', 'How long a phase lasted.',
-     'Months from trough to peak, or from peak to trough.'),
-    ('Holding period', 'How long someone following the rule would actually have held.',
-     'Months from the close that confirmed a bull phase to the close that confirmed the next '
-     'bear phase.'),
+    ('Confidence', 'How much weight the stage reading can bear.',
+     'Low if any data check failed. Medium if the stage history is thin, a breakout is being '
+     'tested, the price is within 5% of a trigger, or this week reads differently from the '
+     'last finished week. High otherwise.'),
+    ('Past major move', 'A large rise or fall in the history, used for the cycle figures below.',
+     'A rise ends at the highest close before a fall of at least the fall size; a fall ends at '
+     'the lowest close before a rise of at least the rise size. These date the past only. '
+     'They are not a reading of today.'),
+    ('Move sizes', 'How large a move has to be to count as a major one.',
+     'The rise size is the median annual volatility over each of the last five years, kept '
+     'between 15% and 35%. The fall size is the same move in log terms, rise / (1 + rise), so '
+     'a 35% rise pairs with a 25.9% fall.'),
+    ('Turning high / low', 'The top of a major rise or the bottom of a major fall.',
+     'Known only in hindsight, once the next major move is confirmed.'),
+    ('Major rise / fall length', 'How long a past major move lasted.',
+     'Months from turning low to turning high, or from high to low.'),
+    ('Holding period', 'How long someone buying and selling on confirmed turns would have held.',
+     'Months from the close that confirmed a major rise to the close that confirmed the next '
+     'major fall.'),
     ('Captured return', 'What that holder would actually have earned.',
      'From the entry close to the exit close, plus dividends paid in between, not reinvested.'),
     ('Support / resistance zone', 'A band where past turns cluster.',
-     'Peaks and troughs no more than 4% apart, grouped. Support is the nearest zone below the '
-     'latest close, resistance the nearest above.'),
+     'Turning highs and lows no more than 4% apart, grouped. Support is the nearest zone below '
+     'the latest close, resistance the nearest above.'),
     ('Held / broke', 'How a zone has behaved.',
-     'Held counts each turning point inside the zone. Broke counts each later phase that ran '
-     'from one side of the zone to the other without turning in it.'),
-    ('Extreme phase', 'A phase unlike the stock\'s normal behaviour.',
+     'Held counts each turning point inside the zone. Broke counts each later major move that '
+     'ran from one side of the zone to the other without turning in it.'),
+    ('Extreme move', 'A major move unlike the stock\'s normal behaviour.',
      'Length or size more than 3.5 robust standard deviations from the median for that kind of '
-     'phase. Only judged once there are at least five phases of that kind.'),
+     'move. Only judged once there are at least five of that kind.'),
     ('Median and middle half', 'The typical value and the usual spread.',
      'The middle value, and the range from the 25th to the 75th percentile.'),
 ]
@@ -826,59 +742,50 @@ LIMITATIONS = [
      'schedule. "What usually comes next" counts what this stock did before, with the number of '
      'cases. With only a handful of cases, those counts describe the past rather than give '
      'odds.'),
+    ('A trigger is a level to watch, not a prediction.',
+     'Crossing it changes the stage; not crossing it says nothing about which way the price '
+     'will go. A trigger on the 30-week average moves a little every week, so check the '
+     'current level rather than an old one.'),
     ('A failed breakout is only clear afterwards.',
-     'For up to 13 weeks after a breakout the page shows both the level that proves it and '
-     'the level that would fail it. Many breakouts dip back towards the breakout level and '
-     'then go on; the buffer and the two-week rule are there so a brief dip does not count, '
-     'but a deeper or longer one will.'),
+     'For up to 13 weeks after a breakout the downside trigger is the level that would fail '
+     'it. Many breakouts dip back towards the breakout level and then go on; the buffer and '
+     'the two-week rule are there so a brief dip does not count, but a deeper or longer one '
+     'will.'),
     ('The stage changes after the move has started.',
      'It waits for two finished weeks in a row, so the first part of any new move happens '
-     'before the stage changes. The 50-day EMA is shown because it usually turns first, and '
-     'the levels to watch say exactly what would change the stage.'),
-    ('This describes the past. It does not forecast.',
-     'The figures show how this stock behaved in earlier cycles. They do not say when the '
-     'current phase will end or how far it will go. A typical length is not a countdown: a '
-     'phase that has run half its typical length does not have the other half still to come.'),
-    ('Turning points are only known late.',
-     'A peak is confirmed only after the price has fallen by the full threshold from it, and a '
-     'trough only after the price has risen by the full threshold. That is deliberate: it stops '
-     'every dip being called a turn. It also means the current phase can end on any day, and '
-     'the page will only show it once the trigger is crossed.'),
-    ('The holding figures are lower than trough to peak, and they are the honest ones.',
+     'before the stage changes. The 50-day EMA is shown because it usually turns first.'),
+    ('The cycle figures describe the past.',
+     'Major moves are dated only in hindsight, once the next one is confirmed, so they say '
+     'nothing about today on their own. A typical length is not a countdown.'),
+    ('The holding figures are lower than low to high, and they are the honest ones.',
      'Nobody buys at the exact low or sells at the exact high. The holding period and the '
-     'captured return assume buying on the close that confirmed the bull phase and selling on '
-     'the close that confirmed the next bear phase, which is what following this rule would '
-     'actually have delivered. For a stock that moves sideways, that can be a loss.'),
+     'captured return assume buying on the close that confirmed a major rise and selling on '
+     'the close that confirmed the next major fall. For a stock that moves sideways, that can '
+     'be a loss.'),
     ('A few cycles make a weak average.',
-     'The number of cycles sits next to every median. With fewer than five, treat the figures '
+     'The number of cases sits next to every median. With fewer than five, treat the figures '
      'as a description of this stock\'s history rather than a pattern to rely on.'),
     ('Leaving out extremes makes the history look calmer than it felt.',
      'The right-hand columns show normal behaviour. A holder would have lived through the '
-     'extreme phases too, which is why both sets of figures are shown and every phase stays in '
+     'extreme moves too, which is why both sets of figures are shown and every move stays in '
      'the history table.'),
     ('Support and resistance are tendencies, not floors or ceilings.',
      'They mark prices where the stock has turned before. Each zone shows how often it held and '
      'how often a later move went straight through it.'),
     ('Price is the only input.',
      'Earnings, valuation, debt and changes in the business are not part of this. After a '
-     'merger, a new line of business or a collapse in its industry, past cycles may stop being '
-     'a useful guide. The deep analysis page covers the business itself.'),
-    ('The threshold is a choice.',
-     'A smaller threshold finds more and shorter cycles, a larger one fewer and longer ones. '
-     'Setting it from the stock\'s own volatility puts every stock on its own scale, but a '
-     'different setting would date some turns differently. For volatile stocks the 35% cap '
-     'means a long fall can stay inside a bull phase, which is why the status and the trend '
-     'are shown beside it.'),
-    ('The stage and the big swing can disagree, and both can be right.',
-     'The stage looks at the last few months; the big swing at the large move it belongs to. A '
-     'stock can be in Stage 4 inside a big bull swing that has not yet fallen far enough to '
-     'end. That is a fall within a long advance, not an error.'),
+     'merger, a new line of business or a collapse in its industry, past patterns may stop '
+     'being a useful guide. The deep analysis page covers the business itself.'),
+    ('The settings are choices.',
+     'The 30-week average, the two-week rule, the 13-week test and the move sizes are standard '
+     'choices applied the same way to every stock. Different settings would date some turns '
+     'and stages differently.'),
     ('The data has limits.',
      'Daily closes from Yahoo, in the listing currency, checked for gaps, frozen prices, '
-     'unrecorded splits and stale dates, with any problem shown under the confidence reading. Levels are traded prices adjusted for '
-     'splits. Intraday highs and lows, trading costs, taxes and currency moves for an investor '
-     'outside the listing market are not included. Nothing before Yahoo\'s history begins is '
-     'covered.'),
+     'unrecorded splits and stale dates, with any problem shown under the confidence reading. '
+     'Levels are traded prices adjusted for splits. Intraday highs and lows, trading costs, '
+     'taxes and currency moves for an investor outside the listing market are not included. '
+     'Nothing before Yahoo\'s history begins is covered.'),
 ]
 
 
@@ -933,8 +840,7 @@ def build(r, name, ticker, exchange, ccy, isin, company_query):
         tone = sgr['current']['tone']
         state = (hl, tone if tone in ('up', 'down') else '')
     else:
-        st = r['status']
-        state = (st['label'], st['tone'] if st['tone'] in ('up', 'down') else '')
+        state = ('No stage yet', '')
     # the company page stretches its cards so both columns end level; here the rail is much
     # shorter than the tables, and stretching left large empty cards, so cards keep their size
     H = [CSS, CY_CSS, '<div class="an cy">',
@@ -951,7 +857,7 @@ def build(r, name, ticker, exchange, ccy, isin, company_query):
          f'<div class="chg {state[1]}">{state[0]}</div></div></div>',
          f'<div class="read" style="margin-top:12px">{reading(r)}</div>',
          '<div class="grid"><div>', chart_card(r), outlook_card(r), '</div><div>', now_card(r),
-         trust_card(r), swing_card(r), '</div></div>',
+         trust_card(r), '</div></div>',
          '<div class="full">', stage_card(r), '</div>',
          '<div class="grid"><div>', typical_card(r), '</div><div>', levels_card(r),
          rule_card(r), '</div></div>',

@@ -1,7 +1,7 @@
 """
 The stage a stock is in now, and what has usually come next for it.
 
-The cycle in cycle.py dates the big swings of the past. It is right for history but slow
+The cycle in cycle.py dates the major moves of the past. It is right for history but slow
 by design: a peak is only known once the price has fallen a long way from it. This module
 answers the other question, where the stock is now, with the four-stage model
 practitioners use (Weinstein):
@@ -357,9 +357,64 @@ def analyse(close, today=None):
     lo52 = float(daily.loc[daily.index[-1] - pd.Timedelta(days=365):].min())
     short.update(high52=hi52, low52=lo52, from_high52=last_px / hi52 - 1,
                  from_low52=last_px / lo52 - 1)
+    cur['triggers'] = triggers(cur, last_px)
     ma_daily = df['ma'].reindex(daily.index, method='ffill')
     return {'weekly': df, 'episodes': eps, 'stats': stats, 'current': cur, 'short': short,
             'ma_daily': ma_daily, 'breaks': breaks, 'break_stats': break_stats(breaks)}
+
+
+# ---------------------------------------------------------------- the two triggers -------
+def triggers(cur, price):
+    """The nearest level in each direction that would change the stage, as
+    {'up': trigger or None, 'down': trigger or None}. Each trigger is
+    {'level', 'to', 'kind', 'moves', 'distance', 'rule'}:
+
+        to        the stage it leads to
+        kind      'range' (edge of a base or top), 'average' (the 30-week average) or
+                  'fail' (back through the level of a breakout still being tested)
+        moves     True when the level shifts week to week (the average)
+        distance  level / latest price - 1
+        rule      what has to happen, in words
+
+    Every stage change waits for CONFIRM_WEEKS finished weeks in a row. A side with no
+    trigger is a side where the stage would only continue (new highs in Stage 2, new lows
+    in Stage 4). This is the one place the levels are worked out; the page, the chart and
+    the exports all read them from here."""
+    st, t = cur['stage'], cur.get('testing')
+    n = CONFIRM_WEEKS
+    up = down = None
+    if st in (1, 3):
+        up = {'level': cur['range_high'], 'to': 2, 'kind': 'range', 'moves': False,
+              'rule': f'{n} weekly closes above a rising 30-week average, the latest above the '
+                      f'top of the {"base" if st == 1 else "range"}'}
+        down = {'level': cur['range_low'], 'to': 4, 'kind': 'range', 'moves': False,
+                'rule': f'{n} weekly closes below a falling 30-week average, the latest under '
+                        f'the bottom of the {"base" if st == 1 else "range"}'}
+    elif st == 2:
+        if t:
+            down = {'level': t['fail'], 'to': t['from'], 'kind': 'fail', 'moves': False,
+                    'rule': f'{n} weekly closes below this level, the breakout level of '
+                            f'{_p(t["pivot"])} less a small buffer: the breakout would have '
+                            f'failed'}
+        else:
+            down = {'level': cur['ma'], 'to': 3, 'kind': 'average', 'moves': True,
+                    'rule': f'{n} weekly closes under the 30-week average, or the average '
+                            f'flattening'}
+    elif st == 4:
+        if t:
+            up = {'level': t['fail'], 'to': t['from'], 'kind': 'fail', 'moves': False,
+                  'rule': f'{n} weekly closes above this level, the breakdown level of '
+                          f'{_p(t["pivot"])} plus a small buffer: the breakdown would have '
+                          f'failed'}
+        else:
+            up = {'level': cur['ma'], 'to': 1, 'kind': 'average', 'moves': True,
+                  'rule': f'{n} weekly closes over the 30-week average, or the average '
+                          f'flattening'}
+    for g in (up, down):
+        if g:
+            g['distance'] = g['level'] / price - 1
+            g['name'] = f'Stage {g["to"]}, {NAMES[g["to"]]}'
+    return {'up': up, 'down': down}
 
 
 # ---------------------------------------------------------------- the outlook ------------
@@ -376,10 +431,10 @@ def _times(n):
     return f'{n} time{"s" if n != 1 else ""}'
 
 
-def outlook(s, swing=None, support=None, resistance=None):
+def outlook(s, support=None, resistance=None):
     """Plain sentences on what usually came next for this stock and what would change the
-    stage, with the price levels. swing is cycle.py's current phase, if any; support and
-    resistance are its nearest zones. Returns a dict of lists of sentences."""
+    stage, with the price levels. support and resistance are the nearest zones of past
+    turns. Returns a dict of lists of sentences."""
     cur, st, sh = s['current'], s['stats'], s['short']
     stage = cur['stage']
     hist = st[stage]
@@ -445,68 +500,48 @@ def outlook(s, swing=None, support=None, resistance=None):
                       f'({_pc(cur["slope"])} over five weeks). The 50-day EMA is at {_p(ema)}, '
                       f'with the price {"above" if sh["above_ema"] else "below"} it.')
 
-    # the breakout or breakdown still being tested, if any
+    # history of breakouts and breakdowns, where it bears on what comes next
     bs = s['break_stats']
     t = cur.get('testing')
-    if t:
-        up = t['dir'] == 'up'
-        word = 'breakout' if up else 'breakdown'
-        line = (f'This {word} from Stage {t["from"]} is still being tested. It is proven by a '
-                f'weekly close {"above" if up else "below"} {_p(t["proof"])}, or by holding '
-                f'until {pd.Timestamp(t["deadline"]):%d %b %Y}. Until then, {CONFIRM_WEEKS} '
-                f'weekly closes {"below" if up else "above"} {_p(t["fail"])} (the '
-                f'{word} level of {_p(t["pivot"])} with a small buffer) would send it back to '
-                f'Stage {t["from"]}, {NAMES[t["from"]]}, as a failed {word}.')
-        (out['down'] if up else out['up']).insert(0, line)
     for d, word in (('up', 'breakout'), ('down', 'breakdown')):
         b = bs[d]
-        relevant = stage in (1, 3) or (t is not None and t['dir'] == d)
-        if b['n'] and relevant:
+        if b['n'] and (stage in (1, 3) or (t is not None and t['dir'] == d)):
             line = (f'Of {b["n"]} past {word}s from a base or top for this stock, '
                     f'{b["failed"]} failed')
             if b['failed'] and b['fail_weeks']['median'] is not None:
                 line += (f', typically within {b["fail_weeks"]["median"]:.0f} '
                          f'week{"s" if b["fail_weeks"]["median"] != 1 else ""}')
-            line += '.'
-            out['next'].append(line)
+            out['next'].append(line + '.')
 
-    # what would move it up, and what would move it down
-    lo, hi = cur['range_low'], cur['range_high']
-    if stage == 4:
-        out['up'].append(f'First sign: a close back above the 50-day EMA at {_p(ema)}.')
-        if not t:
-            out['up'].append(f'Stage 1 (Basing): {CONFIRM_WEEKS} weekly closes in a row that '
-                             f'are not below a falling 30-week average, meaning closes above '
-                             f'about {_p(ma)}, or the average itself stops falling.')
-        out['up'].append(f'Stage 2 directly: {CONFIRM_WEEKS} weekly closes above a rising '
-                         f'30-week average. Rare straight out of a decline.')
-        out['down'].append(f'The decline stays in force while weekly closes stay below the '
-                           f'falling average. The lowest weekly close of this stage is '
-                           f'{_p(lo)}; a close under it means a new low.')
-    elif stage == 1:
-        out['up'].append(f'Stage 2 (Advancing): {CONFIRM_WEEKS} weekly closes above a rising '
-                         f'30-week average (now {_p(ma)}), with a weekly close above the top '
-                         f'of the base at {_p(hi)}.')
-        out['down'].append(f'Back to Stage 4: {CONFIRM_WEEKS} weekly closes below a falling '
-                           f'30-week average, with a weekly close under the bottom of the base '
-                           f'at {_p(lo)}. That would mean the base has failed.')
-    elif stage == 2:
-        out['down'].append(f'First warning: a close below the 50-day EMA at {_p(ema)}.')
-        if not t:
-            out['down'].append(f'Stage 3 (Topping): {CONFIRM_WEEKS} weekly closes that are not '
-                               f'above a rising 30-week average, meaning closes under about '
-                               f'{_p(ma)}, or the average flattening.')
-        out['down'].append(f'Stage 4 directly: {CONFIRM_WEEKS} weekly closes below a falling '
-                           f'average, which happens in sharp sell-offs.')
-        out['up'].append(f'The advance stays in force while weekly closes hold above the '
-                         f'rising average. The highest weekly close of this stage is {_p(hi)}.')
-    else:
-        out['up'].append(f'Back to Stage 2: {CONFIRM_WEEKS} weekly closes above a rising '
-                         f'30-week average (now {_p(ma)}), with a weekly close above the top of '
-                         f'the range at {_p(hi)}.')
-        out['down'].append(f'Stage 4 (Declining): {CONFIRM_WEEKS} weekly closes below a falling '
-                           f'30-week average, with a weekly close under the bottom of the range '
-                           f'at {_p(lo)}.')
+    # the two triggers, then what supports or warns before them
+    trig = cur['triggers']
+    for side, key in (('up', 'up'), ('down', 'down')):
+        g = trig[side]
+        if g:
+            line = (f'{g["name"]}: {g["rule"]}. Level {_p(g["level"])}, '
+                    f'{_pc(abs(g["distance"]), False)} {"above" if side == "up" else "below"} '
+                    f'the price')
+            if g['moves']:
+                line += ', moving with the average each week'
+            out[key].append(line + '.')
+    if t:
+        word = 'breakout' if t['dir'] == 'up' else 'breakdown'
+        (out['down'] if t['dir'] == 'up' else out['up']).append(
+            f'The {word} counts as proven, and this level stops applying, after a weekly '
+            f'close {"above" if t["dir"] == "up" else "below"} {_p(t["proof"])} or on '
+            f'{pd.Timestamp(t["deadline"]):%d %b %Y}, whichever comes first.')
+    if stage == 2:
+        out['up'].append(f'No stage change on the upside: the advance continues while weekly '
+                         f'closes hold above the rising average. Highest weekly close of this '
+                         f'stage: {_p(cur["range_high"])}.')
+        out['down'].append(f'Early warning, not a trigger: a close below the 50-day EMA at '
+                           f'{_p(ema)}.')
+    elif stage == 4:
+        out['down'].append(f'No stage change on the downside: the decline continues while '
+                           f'weekly closes stay below the falling average. Lowest weekly close '
+                           f'of this stage: {_p(cur["range_low"])}.')
+        out['up'].append(f'Early sign, not a trigger: a close back above the 50-day EMA at '
+                         f'{_p(ema)}.')
     if resistance:
         out['up'].append(f'Overhead, past turns cluster at {_p(resistance["low"])}'
                          + (f' to {_p(resistance["high"])}' if resistance['high'] > resistance['low'] * 1.0001 else '')
@@ -515,12 +550,6 @@ def outlook(s, swing=None, support=None, resistance=None):
         out['down'].append(f'Below, past turns cluster at {_p(support["low"])}'
                            + (f' to {_p(support["high"])}' if support['high'] > support['low'] * 1.0001 else '')
                            + ', where the price has turned before.')
-    if swing and swing.get('state') and swing.get('trigger'):
-        word = 'below' if swing['state'] == 'bull' else 'above'
-        big = 'bull' if swing['state'] == 'bull' else 'bear'
-        (out['down'] if big == 'bull' else out['up']).append(
-            f'The big {big} swing that began in {pd.Timestamp(swing["start"]):%b %Y} ends on a '
-            f'daily close {word} {_p(swing["trigger"])}.')
 
     run = cur.get('running')
     if run and run['raw'] is not None:
