@@ -410,6 +410,11 @@ def confidence_of(r):
             medium.append(f'{"no" if total == 0 else "only " + str(total)} past '
                           f'exit{"s" if total != 1 else ""} from Stage {sc["stage"]} in the record '
                           f'to learn what usually comes next')
+        t = sc.get('testing')
+        if t:
+            word = 'breakout' if t['dir'] == 'up' else 'breakdown'
+            medium.append(f'the {word} of the week of {t["week"]:%d %b %Y} is still being '
+                          f'tested and could fail back to Stage {t["from"]}')
         run = sc.get('running')
         if run and run['raw'] and run['raw'] != sc['raw']:
             medium.append('this week so far reads differently from the last finished week')

@@ -75,6 +75,10 @@ def one(symbol, mults):
             'stage_changes_per_year': round(len(eps) / stage_years, 2) if stage_years else None,
             'short_stage_share': round(sum(1 for e in eps if e['weeks'] <= 4 and not e['open'])
                                        / len(eps), 2) if eps else None,
+            'breakouts': sgr['break_stats']['up']['n'] if eps else None,
+            'breakouts_failed': sgr['break_stats']['up']['failed'] if eps else None,
+            'breakdowns': sgr['break_stats']['down']['n'] if eps else None,
+            'breakdowns_failed': sgr['break_stats']['down']['failed'] if eps else None,
             'confidence': r['confidence']['level'],
             'data_warnings': sum(1 for c in r['checks'] if c['level'] == 'warn'),
         })
@@ -98,6 +102,10 @@ def summary(df):
                 g['status'].str.contains('correcting|rebounding').mean()), 2),
             'median stage changes/year': round(float(g['stage_changes_per_year'].median()), 2),
             'share of stages 4 weeks or less': round(float(g['short_stage_share'].median()), 2),
+            'breakout failure rate': round(float(g['breakouts_failed'].sum()
+                                                 / max(1, g['breakouts'].sum())), 2),
+            'breakdown failure rate': round(float(g['breakdowns_failed'].sum()
+                                                  / max(1, g['breakdowns'].sum())), 2),
         })
     return pd.DataFrame(rows)
 

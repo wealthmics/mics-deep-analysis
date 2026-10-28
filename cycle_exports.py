@@ -41,7 +41,7 @@ def stage_rows(r):
     c, sh = sgr['current'], sgr['short']
     slope = ('rising' if c['slope'] > c['band'] else 'falling' if c['slope'] < -c['band']
              else 'flat')
-    rows = [('Stage', f'{c["stage"]}, {c["name"]}', f'since week of {cpg.day(c["start"])}'),
+    rows = [('Stage', c['label'].replace('Stage ', ''), f'since week of {cpg.day(c["start"])}'),
             ('Weeks in this stage', str(c['weeks']), ''),
             ('Last finished week', _p(c['close']), cpg.day(c['week'])),
             ('30-week average', _p(c['ma']), f'{slope}, {_pc(c["slope"])} in 5 weeks'),
@@ -51,6 +51,16 @@ def stage_rows(r):
         if sh.get('cross_date') is not None:
             cross = f'{sh["cross_kind"]} cross on {cpg.day(sh["cross_date"])}'
         rows.append(('50-day EMA vs 200-day', 'above' if sh['ema_over_sma'] else 'below', cross))
+    t = c.get('testing')
+    if t:
+        word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
+        up = t['dir'] == 'up'
+        rows += [(f'{word} level', _p(t['pivot']),
+                  f'from Stage {t["from"]}, week of {cpg.day(t["week"])}'),
+                 (f'{word} proven {"above" if up else "below"}', _p(t['proof']),
+                  f'or by {cpg.day(t["deadline"])}'),
+                 (f'{word} fails {"below" if up else "above"}', _p(t['fail']),
+                  f'2 weekly closes, back to Stage {t["from"]}')]
     rows += [('From 52-week high', _pc(sh['from_high52']), _p(sh['high52'])),
              ('From 52-week low', _pc(sh['from_low52']), _p(sh['low52']))]
     run = c.get('running')
@@ -133,7 +143,8 @@ def stage_episode_rows(r):
         return []
     return [[f'{e["stage"]}, {cpg.sg.NAMES[e["stage"]]}' + (' (open)' if e['open'] else ''),
              cpg.day(e['start']), cpg.day(e['end']), e['weeks'], _p(e['start_price']),
-             _p(e['end_price']), _pc(e['end_price'] / e['start_price'] - 1)]
+             _p(e['end_price']), _pc(e['end_price'] / e['start_price'] - 1),
+             e.get('note') or '']
             for e in sgr['episodes'] if not e['first']][::-1]
 
 
@@ -281,8 +292,9 @@ def build_pptx(r, meta):
                    size=10.5, rowh=0.42)
         eps = stage_episode_rows(r)[:8]
         if eps:
-            rows = [['Stage', 'From week of', 'To week of', 'Weeks', 'Start', 'End', 'Change']] + eps
-            deck.table(s, X0, 4.2, [2.0, 1.7, 1.7, 1.0, 1.3, 1.3, 1.3], rows, size=9.5,
+            rows = [['Stage', 'From week of', 'To week of', 'Weeks', 'Start', 'End', 'Change',
+                     'How it began']] + eps
+            deck.table(s, X0, 4.2, [1.9, 1.5, 1.5, 0.8, 1.2, 1.2, 1.1, 2.0], rows, size=9.5,
                        rowh=0.3)
 
     # levels, the rule and confidence
@@ -448,7 +460,7 @@ def build_xlsx(r, meta):
     # ---- Stages
     srows = stage_stat_rows(r)
     if srows:
-        ws = book.sheet('Stages', widths=(22, 10, 13, 13, 18, 14, 13, 14, 13))
+        ws = book.sheet('Stages', widths=(26, 13, 13, 13, 18, 14, 13, 18, 13))
         rr = book.title(ws, 'Every stage this stock has been through',
                         'How each stage usually behaved, counted from the week it began, then '
                         'every stage, most recent first.')
@@ -457,7 +469,7 @@ def build_xlsx(r, meta):
                                  'Median 26w'], srows)
         rr = book.heading(ws, rr + 1, 'Every stage')
         book.table(ws, rr, ['Stage', 'From week of', 'To week of', 'Weeks', 'Start', 'End',
-                            'Change'], stage_episode_rows(r))
+                            'Change', 'How it began'], stage_episode_rows(r))
 
     # ---- Typical cycle, as numbers
     ws = book.sheet('Typical cycle', widths=(36, 12, 12, 12, 9, 14, 12, 12, 9))

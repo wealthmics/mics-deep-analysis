@@ -29,6 +29,15 @@ Rules, all on completed weekly closes so nothing is decided on a half-finished w
     base and the high of the advance is the ceiling of the top. A sideways stock that
     drifts with its average therefore stays a base or a top until it actually breaks out.
 
+    A move out of a base or top is a breakout (up) or breakdown (down), and is tested
+    before it is trusted. The edge of the range it left is the pivot. The move is proven
+    by a weekly close one range-height beyond the pivot, or by lasting PROVE_WEEKS weeks.
+    Until then, CONFIRM_WEEKS weekly closes back through the pivot, less a buffer of the
+    stock's own volatility, send it back to the stage it came from as a failed breakout or
+    breakdown, with the old range kept; and a pause while it is being tested does not
+    count as a new top or base. A reversal straight from Stage 4 to 2 or 2 to 4 has no
+    range, so it has no pivot to fail back through.
+
     A stage once decided is never changed by later prices, so the history and today can
     never disagree. The first stage in the record is a guess from where the history
     starts, and is left out of every statistic.
@@ -49,6 +58,7 @@ VOL_WEEKS = 52
 FLAT_SHARE = 0.25           # flat while the 5-week change is under this share of 5-week vol
 FLAT_FLOOR = 0.005          # and never narrower than 0.5%
 CONFIRM_WEEKS = 2
+PROVE_WEEKS = 13            # a breakout still unproven after a quarter counts as proven
 BOX_LOOKBACK = 13           # a base or top's range includes the 13 weeks before it began,
                             # so the low of the decline is the floor of the base
 FORWARD_WEEKS = (13, 26)    # what the price did over the next quarter and half year
@@ -109,13 +119,24 @@ def read_one(close, ma, slope, band):
 
 # ---------------------------------------------------------------- the stage walk ---------
 def walk(df):
-    """Stage for every completed week, oldest first. Nothing after a week is used on it."""
-    stages, stage, began = [], None, 0
+    """Stage for every completed week, oldest first. Nothing after a week is used on it.
+
+    Returns (table with 'stage' and 'note' columns, every range breakout, the breakout
+    still being tested or None). A breakout is a move out of a base or top: from Stage 1
+    or 3 into Stage 2 (up) or Stage 4 (down). Each one is tested until it proves itself,
+    by price (a weekly close one range-height beyond the pivot) or by time (PROVE_WEEKS),
+    or fails (CONFIRM_WEEKS weekly closes back through the pivot, less a volatility
+    buffer), which returns the stock to the stage it came from with its range intact."""
+    idx = list(df.index)
     raws = list(df['raw'])
     closes = list(df['close'])
+    bands = list(df['band'])
+    stages, notes = [], []
+    stage, began, piv, breaks = None, 0, None, []
     for i, r in enumerate(raws):
         if r is None:
             stages.append(None)
+            notes.append(None)
             continue
         if stage is None:
             if r == 'up':
@@ -127,31 +148,84 @@ def walk(df):
                 stage = 3 if closes[i] > back else 1
             began = i
             stages.append(stage)
+            notes.append(None)
             continue
+
+        c, note, before, failed = closes[i], None, stage, False
+
+        # the breakout being tested: proven, timed out, or failed
+        if piv is not None:
+            rec, up = piv['record'], piv['dir'] > 0
+            since = i - piv['at']
+            if (up and c >= piv['proof']) or (not up and c <= piv['proof']):
+                rec.update(outcome='proven', how='price', weeks=since)
+                piv = None
+            elif since >= PROVE_WEEKS:
+                rec.update(outcome='proven', how='time', weeks=since)
+                piv = None
+            elif since >= CONFIRM_WEEKS:
+                last = closes[i - CONFIRM_WEEKS + 1:i + 1]
+                back_in = (all(x < piv['fail'] for x in last) if up else
+                           all(x > piv['fail'] for x in last))
+                if back_in:
+                    rec.update(outcome='failed', how='price', weeks=since, back_to=piv['from'])
+                    stage, began = piv['from'], piv['began']
+                    note = 'breakout failed' if up else 'breakdown failed'
+                    piv, failed = None, True
+
         recent = raws[i - CONFIRM_WEEKS + 1:i + 1] if i >= CONFIRM_WEEKS - 1 else []
         recent = [x for x in recent if x is not None]
-        if len(recent) == CONFIRM_WEEKS:
+        if not failed and len(recent) == CONFIRM_WEEKS:
             all_up = all(x == 'up' for x in recent)
             all_down = all(x == 'down' for x in recent)
             none_up = all(x != 'up' for x in recent)
             none_down = all(x != 'down' for x in recent)
-            before = stage
+            testing = piv is not None
             if stage == 2:
-                stage = 4 if all_down else 3 if none_up else 2
+                # a fresh breakout pausing above its pivot is not yet a top
+                stage = 4 if all_down else 3 if (none_up and not testing) else 2
             elif stage == 4:
-                stage = 2 if all_up else 1 if none_down else 4
+                stage = 2 if all_up else 1 if (none_down and not testing) else 4
             else:
-                box = closes[max(0, began - BOX_LOOKBACK):i - CONFIRM_WEEKS + 1]
-                if all_up and (not box or closes[i] > max(box)):
+                start = max(0, began - BOX_LOOKBACK)
+                box = closes[start:i - CONFIRM_WEEKS + 1]
+                band = bands[i] if bands[i] == bands[i] else FLAT_FLOOR
+                if all_up and (not box or c > max(box)):
                     stage = 2
-                elif all_down and (not box or closes[i] < min(box)):
+                    if box:
+                        hi, lo = max(box), min(box)
+                        piv = {'dir': 1, 'level': hi, 'fail': hi * (1 - band),
+                               'proof': hi + max(hi - lo, hi * 2 * band)}
+                elif all_down and (not box or c < min(box)):
                     stage = 4
-            if stage != before:
-                began = i
+                    if box:
+                        hi, lo = max(box), min(box)
+                        piv = {'dir': -1, 'level': lo, 'fail': lo * (1 + band),
+                               'proof': max(lo * 0.01, lo - max(hi - lo, lo * 2 * band))}
+                if piv is not None and stage != before:
+                    piv.update(at=i, began=began, **{'from': before})
+                    rec = {'dir': 'up' if piv['dir'] > 0 else 'down', 'week': idx[i],
+                           'from': before, 'pivot': piv['level'], 'fail': piv['fail'],
+                           'proof': piv['proof'],
+                           'deadline': idx[i] + pd.Timedelta(weeks=PROVE_WEEKS),
+                           'outcome': 'testing', 'how': None, 'weeks': None, 'back_to': None}
+                    piv['record'] = rec
+                    breaks.append(rec)
+                    note = 'breakout' if piv['dir'] > 0 else 'breakdown'
+            # a breakout that turned straight into the opposite trend has failed too
+            if piv is not None and piv['at'] != i and stage != before:
+                piv['record'].update(outcome='failed', how='trend', weeks=i - piv['at'],
+                                     back_to=stage)
+                note = 'breakout failed' if piv['dir'] > 0 else 'breakdown failed'
+                piv = None
+        if stage != before and not failed:
+            began = i
         stages.append(stage)
+        notes.append(note)
     out = df.copy()
     out['stage'] = stages
-    return out
+    out['note'] = notes
+    return out, breaks, piv
 
 
 def episodes(df):
@@ -167,7 +241,7 @@ def episodes(df):
         else:
             out.append({'stage': st, 'start': when, 'end': when, 'weeks': 1,
                         'start_price': float(row['close']), 'end_price': float(row['close']),
-                        'first': not out, 'open': False})
+                        'first': not out, 'open': False, 'note': row.get('note')})
     if out:
         out[-1]['open'] = True
     return out
@@ -202,6 +276,20 @@ def history(df, eps):
     return stats
 
 
+def break_stats(breaks):
+    """How this stock's past breakouts and breakdowns turned out. Ones still being tested
+    are left out, since their outcome is not known yet."""
+    out = {}
+    for d in ('up', 'down'):
+        done = [b for b in breaks if b['dir'] == d and b['outcome'] != 'testing']
+        failed = [b for b in done if b['outcome'] == 'failed']
+        out[d] = {'n': len(done), 'failed': len(failed),
+                  'fail_weeks': describe([b['weeks'] for b in failed]),
+                  'by_price': sum(1 for b in done if b['outcome'] == 'proven'
+                                  and b['how'] == 'price')}
+    return out
+
+
 def describe(vals, positive=False):
     x = [v for v in vals if v is not None and not math.isnan(v)]
     if not x:
@@ -220,19 +308,29 @@ def analyse(close, today=None):
     if len(w) < MA_WEEKS + SLOPE_WEEKS + CONFIRM_WEEKS:
         return {'error': f'Only {len(w)} completed weeks. A stage needs about '
                          f'{MA_WEEKS + SLOPE_WEEKS + CONFIRM_WEEKS} weeks of history.'}
-    df = walk(frame(w))
+    df, breaks, piv = walk(frame(w))
     eps = episodes(df)
     if not eps:
         return {'error': 'No stage could be read from this history.'}
     stats = history(df, eps)
     last = df.iloc[-1]
     cur = dict(eps[-1])
+    cur['testing'] = None
+    if piv is not None:
+        rec = piv['record']
+        cur['testing'] = {'dir': rec['dir'], 'pivot': rec['pivot'], 'fail': rec['fail'],
+                          'proof': rec['proof'], 'week': rec['week'],
+                          'deadline': rec['deadline'], 'from': rec['from'],
+                          'weeks': len(df) - 1 - piv['at']}
     k0 = df.index.get_loc(cur['start'])
     since = df.iloc[max(0, k0 - BOX_LOOKBACK):] if cur['stage'] in (1, 3) else df.iloc[k0:]
     cur.update(ma=float(last['ma']), slope=float(last['slope']), band=float(last['band']),
                raw=last['raw'], week=df.index[-1], close=float(last['close']),
                range_high=float(since['close'].max()), range_low=float(since['close'].min()),
-               name=NAMES[cur['stage']], tone=TONE[cur['stage']])
+               name=NAMES[cur['stage']], tone=TONE[cur['stage']],
+               label=f'Stage {cur["stage"]}, {NAMES[cur["stage"]]}'
+                     + (f' ({cur["note"]})' if cur.get('note') in ('breakout failed',
+                                                                    'breakdown failed') else ''))
     cur['to_ma'] = cur['ma'] / cur['close'] - 1
     if running is not None:
         r = read_one(running[1], cur['ma'], cur['slope'], cur['band'])
@@ -261,7 +359,7 @@ def analyse(close, today=None):
                  from_low52=last_px / lo52 - 1)
     ma_daily = df['ma'].reindex(daily.index, method='ffill')
     return {'weekly': df, 'episodes': eps, 'stats': stats, 'current': cur, 'short': short,
-            'ma_daily': ma_daily}
+            'ma_daily': ma_daily, 'breaks': breaks, 'break_stats': break_stats(breaks)}
 
 
 # ---------------------------------------------------------------- the outlook ------------
@@ -287,7 +385,13 @@ def outlook(s, swing=None, support=None, resistance=None):
     hist = st[stage]
     out = {'now': [], 'next': [], 'up': [], 'down': [], 'caveat': []}
 
-    out['now'].append(f'Stage {stage}, {cur["name"]}. {MEANING[stage]}')
+    out['now'].append(f'{cur["label"]}. {MEANING[stage]}')
+    if cur.get('note') == 'breakout failed':
+        out['now'].append('It broke out of this range recently but fell back into it, so the '
+                          'range is still in charge.')
+    elif cur.get('note') == 'breakdown failed':
+        out['now'].append('It broke down out of this range recently but climbed back into it, '
+                          'so the range is still in charge.')
     typ = hist['weeks']
     if typ['n']:
         share = cur['weeks'] / typ['median'] if typ['median'] else None
@@ -306,9 +410,10 @@ def outlook(s, swing=None, support=None, resistance=None):
 
     nxt = hist['next']
     total = sum(nxt.values())
+    back = {2: 'a failed breakout', 4: 'a failed breakdown'}
     if total:
-        parts = [f'Stage {k} ({NAMES[k]}) {_times(v)}' for k, v in
-                 sorted(nxt.items(), key=lambda kv: -kv[1])]
+        parts = [f'Stage {k} ({NAMES[k]}{", " + back[stage] if (stage, k) in ((2, 1), (4, 3)) else ""}) '
+                 f'{_times(v)}' for k, v in sorted(nxt.items(), key=lambda kv: -kv[1])]
         out['next'].append(f'After past Stage {stage} runs, this stock moved to '
                            + ', '.join(parts) + f', out of {total}.')
     usual = {1: 'In the textbook sequence a base leads to an advance (Stage 2), but bases '
@@ -333,19 +438,46 @@ def outlook(s, swing=None, support=None, resistance=None):
 
     ma, ema = cur['ma'], sh['ema_level']
     ma_side = 'above' if cur['close'] >= ma else 'below'
+    gap = cur['close'] / ma - 1
     out['now'].append(f'The latest weekly close of {_p(cur["close"])} is '
-                      f'{_pc(abs(cur["to_ma"]), False)} {ma_side} the 30-week average at '
+                      f'{_pc(abs(gap), False)} {ma_side} the 30-week average at '
                       f'{_p(ma)}, which is {"rising" if cur["slope"] > cur["band"] else "falling" if cur["slope"] < -cur["band"] else "flat"} '
                       f'({_pc(cur["slope"])} over five weeks). The 50-day EMA is at {_p(ema)}, '
                       f'with the price {"above" if sh["above_ema"] else "below"} it.')
+
+    # the breakout or breakdown still being tested, if any
+    bs = s['break_stats']
+    t = cur.get('testing')
+    if t:
+        up = t['dir'] == 'up'
+        word = 'breakout' if up else 'breakdown'
+        line = (f'This {word} from Stage {t["from"]} is still being tested. It is proven by a '
+                f'weekly close {"above" if up else "below"} {_p(t["proof"])}, or by holding '
+                f'until {pd.Timestamp(t["deadline"]):%d %b %Y}. Until then, {CONFIRM_WEEKS} '
+                f'weekly closes {"below" if up else "above"} {_p(t["fail"])} (the '
+                f'{word} level of {_p(t["pivot"])} with a small buffer) would send it back to '
+                f'Stage {t["from"]}, {NAMES[t["from"]]}, as a failed {word}.')
+        (out['down'] if up else out['up']).insert(0, line)
+    for d, word in (('up', 'breakout'), ('down', 'breakdown')):
+        b = bs[d]
+        relevant = stage in (1, 3) or (t is not None and t['dir'] == d)
+        if b['n'] and relevant:
+            line = (f'Of {b["n"]} past {word}s from a base or top for this stock, '
+                    f'{b["failed"]} failed')
+            if b['failed'] and b['fail_weeks']['median'] is not None:
+                line += (f', typically within {b["fail_weeks"]["median"]:.0f} '
+                         f'week{"s" if b["fail_weeks"]["median"] != 1 else ""}')
+            line += '.'
+            out['next'].append(line)
 
     # what would move it up, and what would move it down
     lo, hi = cur['range_low'], cur['range_high']
     if stage == 4:
         out['up'].append(f'First sign: a close back above the 50-day EMA at {_p(ema)}.')
-        out['up'].append(f'Stage 1 (Basing): {CONFIRM_WEEKS} weekly closes in a row that are '
-                         f'not below a falling 30-week average, meaning closes above about '
-                         f'{_p(ma)}, or the average itself stops falling.')
+        if not t:
+            out['up'].append(f'Stage 1 (Basing): {CONFIRM_WEEKS} weekly closes in a row that '
+                             f'are not below a falling 30-week average, meaning closes above '
+                             f'about {_p(ma)}, or the average itself stops falling.')
         out['up'].append(f'Stage 2 directly: {CONFIRM_WEEKS} weekly closes above a rising '
                          f'30-week average. Rare straight out of a decline.')
         out['down'].append(f'The decline stays in force while weekly closes stay below the '
@@ -360,9 +492,10 @@ def outlook(s, swing=None, support=None, resistance=None):
                            f'at {_p(lo)}. That would mean the base has failed.')
     elif stage == 2:
         out['down'].append(f'First warning: a close below the 50-day EMA at {_p(ema)}.')
-        out['down'].append(f'Stage 3 (Topping): {CONFIRM_WEEKS} weekly closes that are not '
-                           f'above a rising 30-week average, meaning closes under about '
-                           f'{_p(ma)}, or the average flattening.')
+        if not t:
+            out['down'].append(f'Stage 3 (Topping): {CONFIRM_WEEKS} weekly closes that are not '
+                               f'above a rising 30-week average, meaning closes under about '
+                               f'{_p(ma)}, or the average flattening.')
         out['down'].append(f'Stage 4 directly: {CONFIRM_WEEKS} weekly closes below a falling '
                            f'average, which happens in sharp sell-offs.')
         out['up'].append(f'The advance stays in force while weekly closes hold above the '

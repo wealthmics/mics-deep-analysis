@@ -10,6 +10,14 @@ once the price breaks out of its range, so one odd week cannot flip it. The 50-d
 the 200-day average and the golden or death cross are shown as the early warning. A stage
 once decided never changes when new prices arrive.
 
+**Is a breakout real?** A move out of a base or top is tested before it is trusted. The
+edge of the range is the pivot; the move is proven by a weekly close one range-height
+beyond it or by lasting 13 weeks, and fails on two weekly closes back through it (less a
+volatility buffer), which returns the stock to the stage it came from. While a move is
+being tested the page shows all three levels, and the history counts how many past
+breakouts and breakdowns failed. On random prices about 40 to 50% fail, so a stock that
+fails much less often than that is trending for real.
+
 **What usually comes next?** For the current stage, the page counts what followed every
 past stage of the same kind for this stock, how long they lasted and where the price was
 13 and 26 weeks later, with the number of cases next to every figure, and lists the exact

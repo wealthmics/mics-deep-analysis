@@ -57,7 +57,7 @@ TREND_LINE = '#3f6aa8'
 
 
 def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), stage_daily=None,
-              width=720, height=290):
+              marks=(), width=720, height=290):
     """Price on a log scale, so a 30% fall looks the same size at 10 as at 1,000.
 
     Bear phases are shaded, peaks and troughs marked, the nearest support and resistance
@@ -128,6 +128,15 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
             ap = ' '.join(f'{x(t):.1f},{y(float(v)):.1f}' for t, v in avg.items())
             parts.append(f'<polyline fill="none" stroke="{colour}" stroke-width="1.4" '
                          + (f'stroke-dasharray="{dash}" ' if dash else '') + f'points="{ap}"/>')
+
+    # levels of a breakout still being tested, from the breakout week on
+    for start, level, colour, label in marks:
+        if not (math.exp(lo) < level < math.exp(hi)):
+            continue
+        xa = x(max(pd.Timestamp(start), t0))
+        parts.append(f'<line x1="{xa:.1f}" x2="{width:.1f}" y1="{y(level):.1f}" '
+                     f'y2="{y(level):.1f}" stroke="{colour}" stroke-width="1.3" '
+                     f'stroke-dasharray="1,3"><title>{esc(label)}: {px(level)}</title></line>')
 
     # the stage of every week, as a strip along the bottom
     for e in stage_eps:
@@ -237,6 +246,33 @@ def chart_lines(r):
     return ((sgr['short']['ema'], EMA_LINE, None), (sgr['ma_daily'], TREND_LINE, '4,3'))
 
 
+def testing(r):
+    sgr = r.get('stage') or {}
+    return None if not sgr or sgr.get('error') else sgr['current'].get('testing')
+
+
+def test_marks(r):
+    t = testing(r)
+    if not t:
+        return ()
+    word = 'breakout' if t['dir'] == 'up' else 'breakdown'
+    good, bad = (UP, DOWN) if t['dir'] == 'up' else (DOWN, UP)
+    return ((t['week'], t['proof'], good, f'{word.title()} proven beyond'),
+            (t['week'], t['fail'], bad, f'{word.title()} fails beyond'))
+
+
+def test_legend(r):
+    t = testing(r)
+    if not t:
+        return ''
+    word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
+    good, bad = (UP, DOWN) if t['dir'] == 'up' else (DOWN, UP)
+    dots = 'repeating-linear-gradient(90deg,{} 0 1px,transparent 1px 4px)'
+    return (f'<div class="clegend"><span><i style="background:{dots.format(good)}"></i>{word} '
+            f'proven beyond {px(t["proof"])}</span><span><i style="background:'
+            f'{dots.format(bad)}"></i>{word} fails beyond {px(t["fail"])}</span></div>')
+
+
 def stage_eps(r):
     sgr = r.get('stage') or {}
     return () if sgr.get('error') or not sgr else sgr['episodes']
@@ -267,8 +303,8 @@ def chart_card(r):
                     f'class="si-{lab}">{word}</label>')
         panels.append(f'<div class="spanpanel sp-{lab}{on}">'
                       + svg_cycle(win, r['points'], cur, r['phases'], shown, chart_lines(r),
-                                  stage_eps(r), stage_daily(r)) + '</div>')
-    body = (LEGEND + f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
+                                  stage_eps(r), stage_daily(r), test_marks(r)) + '</div>')
+    body = (LEGEND + test_legend(r) + f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
             f'{"".join(panels)}</div>'
             '<div class="smallnote">Hover over the chart for the date, close and stage. Hover over '
             'a marker for the turning point and the day it was confirmed, and over the strip '
@@ -292,8 +328,7 @@ def headline(r):
     sgr = r.get('stage') or {}
     if sgr.get('error') or not sgr:
         return None
-    c = sgr['current']
-    return f'Stage {c["stage"]}, {c["name"]}'
+    return sgr['current']['label']
 
 
 def stage_reading(r):
@@ -400,7 +435,7 @@ def now_card(r):
         c, sh = sgr['current'], sgr['short']
         slope = ('rising' if c['slope'] > c['band'] else 'falling' if c['slope'] < -c['band']
                  else 'flat')
-        rows = [kv('Stage', f'{c["stage"]}, {c["name"]}',
+        rows = [kv('Stage', c['label'].replace('Stage ', ''),
                    f'since week of {day(c["start"])}'),
                 kv('Weeks in this stage', str(c['weeks'])),
                 kv('Last finished week', px(c['close']), day(c['week'])),
@@ -415,6 +450,16 @@ def now_card(r):
                          f'{day(sh["cross_date"])}')
             rows.append(kv('50-day EMA vs 200-day', 'above' if sh['ema_over_sma'] else 'below',
                            cross))
+        t = c.get('testing')
+        if t:
+            word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
+            up = t['dir'] == 'up'
+            rows += [kv(f'{word} level', px(t['pivot']), f'from Stage {t["from"]}, week of '
+                                                         f'{day(t["week"])}'),
+                     kv(f'{word} proven {"above" if up else "below"}', px(t['proof']),
+                        f'or by {day(t["deadline"])}'),
+                     kv(f'{word} fails {"below" if up else "above"}', px(t['fail']),
+                        f'{sg.CONFIRM_WEEKS} weekly closes, back to Stage {t["from"]}')]
         rows += [kv('From 52-week high', pct(sh['from_high52']), px(sh['high52'])),
                  kv('From 52-week low', pct(sh['from_low52']), px(sh['low52']))]
         run = c.get('running')
@@ -503,17 +548,30 @@ def stage_card(r):
                     + (f'<td>{f26["up"]} of {f26["n"]}</td><td>{pct(f26["median"])}</td>'
                        if f26['n'] else '<td>n/a</td><td>n/a</td>') + '</tr>')
     rows.append('</tbody></table>')
+    bs = sgr['break_stats']
+    lines = []
+    for d, word in (('up', 'breakouts'), ('down', 'breakdowns')):
+        b = bs[d]
+        if b['n']:
+            line = (f'{b["n"]} past {word} from a base or top, {b["failed"]} failed '
+                    f'({b["failed"] / b["n"] * 100:.0f}%)')
+            if b['failed'] and b['fail_weeks']['median'] is not None:
+                line += f', a median of {b["fail_weeks"]["median"]:.0f} weeks after the move'
+            lines.append(line + '.')
+    if lines:
+        rows.append('<div class="body-text" style="margin-top:12px">' + ' '.join(lines) + '</div>')
     recent = [e for e in sgr['episodes'] if not e['first']][::-1][:12]
     rows.append('<table class="nw" style="margin-top:14px"><thead><tr><th>Stage</th>'
                 '<th>From week of</th><th>To week of</th><th>Weeks</th><th>Start</th>'
-                '<th>End</th><th>Change</th></tr></thead><tbody>')
+                '<th>End</th><th>Change</th><th>How it began</th></tr></thead><tbody>')
     for e in recent:
         ch = e['end_price'] / e['start_price'] - 1
         cls = 'up' if ch > 0 else 'down'
         rows.append(f'<tr><td class="lab">{e["stage"]}, {sg.NAMES[e["stage"]]}'
                     f'{" (open)" if e["open"] else ""}</td><td>{day(e["start"])}</td>'
                     f'<td>{day(e["end"])}</td><td>{e["weeks"]}</td><td>{px(e["start_price"])}</td>'
-                    f'<td>{px(e["end_price"])}</td><td class="val {cls}">{pct(ch)}</td></tr>')
+                    f'<td>{px(e["end_price"])}</td><td class="val {cls}">{pct(ch)}</td>'
+                    f'<td>{esc(e.get("note") or "")}</td></tr>')
     rows.append('</tbody></table>')
     return card('Every stage this stock has been through', ''.join(rows),
                 'Top table: how each stage usually behaved for this stock, counted from the '
@@ -700,6 +758,13 @@ DEFINITIONS = [
      'both read up); from 1 or 3, two up weeks give 2 and two down weeks give 4, but only once the close '
      'also breaks out of that base or top: above its highest weekly close, or below its '
      'lowest, counting the 13 weeks before it began.'),
+    ('Breakout and its test', 'A move out of a base or top, checked before it is trusted.',
+     'When Stage 1 or 3 turns into Stage 2 or 4, the edge of the range it left is the '
+     'breakout level. The move is proven by a weekly close one range-height beyond that level, '
+     'or by holding for 13 weeks. Before that, two weekly closes back through the level, less '
+     'a buffer of the stock\'s own volatility, send it back to the stage it came from as a '
+     'failed breakout or breakdown, with the old range kept. While a move is being tested, a '
+     'pause does not count as a new top or base.'),
     ('30-week average', 'The stage line.',
      'The average of the last 30 weekly closes. It counts as flat while its five-week change '
      'is smaller than a quarter of the stock\'s own five-week volatility, and never less than '
@@ -761,6 +826,11 @@ LIMITATIONS = [
      'schedule. "What usually comes next" counts what this stock did before, with the number of '
      'cases. With only a handful of cases, those counts describe the past rather than give '
      'odds.'),
+    ('A failed breakout is only clear afterwards.',
+     'For up to 13 weeks after a breakout the page shows both the level that proves it and '
+     'the level that would fail it. Many breakouts dip back towards the breakout level and '
+     'then go on; the buffer and the two-week rule are there so a brief dip does not count, '
+     'but a deeper or longer one will.'),
     ('The stage changes after the move has started.',
      'It waits for two finished weeks in a row, so the first part of any new move happens '
      'before the stage changes. The 50-day EMA is shown because it usually turns first, and '
