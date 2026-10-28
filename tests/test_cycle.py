@@ -118,7 +118,7 @@ def test_fall_threshold_is_log_symmetric():
     assert (1 - cy.fall_for(0.35)) * 1.35 == pytest.approx(1.0)
 
 
-def test_uber_case_leads_with_the_stage_not_the_big_swing():
+def test_uber_case_leads_with_the_stage():
     """About 24% off the high with a 35% rise threshold: the fall needed to end the big
     swing is 25.9%, so the swing can still be bull, but the stage must say Declining and
     the page must say why the two differ."""
@@ -127,8 +127,9 @@ def test_uber_case_leads_with_the_stage_not_the_big_swing():
     assert r['stage']['current']['stage'] == 4
     import cycle_page as cpg
     assert cpg.headline(r) == 'Stage 4, Declining'
-    if r['current']['state'] == 'bull':
-        assert any('opposite ways' in x for x in r['confidence']['reasons'])
+    trig = r['stage']['current']['triggers']
+    assert trig['down'] is None                    # in Stage 4 a fall only continues it
+    assert trig['up'] is not None and trig['up']['to'] in (1, 3)
     assert r['outlook']['up'] and r['outlook']['down']
 
 
@@ -230,8 +231,13 @@ def test_page_and_exports_build():
     r = cy.analyse(uber_like(), threshold=0.35, today=TODAY, bench_name='S&P 500')
     html = cpg.build(r, 'Test Co', 'TEST', 'NYSE', 'USD', None, 'ticker=TEST')
     for part in ('Stage ', 'What usually comes next', 'How much to trust this reading',
-                 '50-day EMA', 'The big swing', 'Every stage this stock has been through'):
+                 '50-day EMA', 'Stage triggers', 'Turns to Stage',
+                 'Every stage this stock has been through', 'Support and resistance'):
         assert part in html
+    for gone in ('Big swing', 'big swing', 'Trigger that ends', 'Bull phase', 'Bear phase'):
+        assert gone not in html
+    for blob in (cye.build_xlsx(r, {'name': 'T', 'symbol': 'T'}),):
+        assert len(blob) > 1000
     meta = {'name': 'Test Co', 'symbol': 'TEST', 'exchange': 'NYSE', 'ccy': 'USD', 'isin': None}
     assert len(cye.build_xlsx(r, meta)) > 1000
     assert len(cye.build_pptx(r, meta)) > 1000
@@ -242,8 +248,9 @@ def test_page_and_exports_build():
 # checked exactly, with no randomness. Band 1%: fail level = pivot less 1%.
 def weeks(rows, band=0.01):
     idx = pd.date_range(end='2026-10-23', periods=len(rows), freq='W-FRI')
-    return pd.DataFrame({'close': [c for c, _ in rows], 'ma': np.nan, 'slope': np.nan,
-                         'band': band, 'raw': [r for _, r in rows]}, index=idx)
+    close = pd.Series([c for c, _ in rows], index=idx, dtype=float)
+    return pd.DataFrame({'close': close, 'ma': close.rolling(30, min_periods=1).mean(),
+                         'slope': 0.0, 'band': band, 'raw': [r for _, r in rows]}, index=idx)
 
 
 BASE = [(100, 'neutral'), (103, 'neutral'), (101, 'neutral'), (104, 'neutral'),
@@ -336,7 +343,7 @@ def test_breakout_test_is_shown_with_its_levels(monkeypatch):
     text = ' '.join(o['down'])
     for level in ('103.00', f'{t["fail"]:,.2f}', f'{t["proof"]:,.2f}'):
         assert level in text
-    assert 'failed breakout' in text
+    assert 'breakout would have failed' in text
 
 
 def test_reading_and_card_give_the_same_distance_to_the_average():
@@ -349,3 +356,77 @@ def test_reading_and_card_give_the_same_distance_to_the_average():
     assert f'{abs(gap) * 100:.1f}% above the 30-week average' in text
     card = re.sub('<[^>]+>', '|', cpg.now_card(r))
     assert f'{gap * 100:+.1f}%'.replace('-', '\u2212') in card
+
+
+# ------------------------------------------------------------------ stage triggers --------
+def run_table(rows, monkeypatch):
+    """Full stage reading for hand-written weeks, as the page would get it."""
+    table = weeks(rows)
+    monkeypatch.setattr(cy.sg, 'frame', lambda w: table)
+    daily = table['close'].reindex(pd.bdate_range(table.index[0] - pd.Timedelta(days=4),
+                                                  table.index[-1]), method='bfill')
+    return cy.sg.analyse(daily, table.index[-1])
+
+
+LONG_BASE = [(100 + (i % 5), 'neutral') for i in range(40)]      # 100 to 104
+
+
+def test_base_has_both_triggers_from_its_range(monkeypatch):
+    s = run_table(LONG_BASE, monkeypatch)
+    trig = s['current']['triggers']
+    assert s['current']['stage'] == 1
+    assert trig['up']['to'] == 2 and trig['up']['level'] == 104 and not trig['up']['moves']
+    assert trig['down']['to'] == 4 and trig['down']['level'] == 100
+
+
+def test_breakout_under_test_points_back_to_the_base(monkeypatch):
+    s = run_table(LONG_BASE + [(105, 'up'), (106, 'up')], monkeypatch)
+    trig, t = s['current']['triggers'], s['current']['testing']
+    assert s['current']['stage'] == 2 and t
+    assert trig['up'] is None
+    assert trig['down']['to'] == 1 and trig['down']['kind'] == 'fail'
+    assert trig['down']['level'] == pytest.approx(t['fail'])
+
+
+def test_proven_advance_points_down_to_a_top_at_the_average(monkeypatch):
+    s = run_table(LONG_BASE + [(105, 'up'), (106, 'up'), (112, 'up'), (113, 'up')],
+                  monkeypatch)
+    c = s['current']
+    assert c['stage'] == 2 and c['testing'] is None
+    assert c['triggers']['up'] is None
+    down = c['triggers']['down']
+    assert down['to'] == 3 and down['kind'] == 'average' and down['moves']
+    assert down['level'] == pytest.approx(c['ma'])
+
+
+def test_every_stage_has_at_most_one_trigger_each_way(monkeypatch):
+    """Whatever the history, the page never shows two levels on the same side."""
+    for seed in range(40):
+        rng = np.random.default_rng(seed)
+        c = pd.Series(50 * np.exp(np.cumsum(rng.normal(0.0003, 0.02, 252 * 8))),
+                      index=pd.bdate_range(end=TODAY, periods=252 * 8))
+        s = cy.sg.analyse(c, TODAY)
+        cur = s['current']
+        trig = cur['triggers']
+        assert set(trig) == {'up', 'down'}
+        if cur['stage'] == 2:
+            assert trig['up'] is None and trig['down'] is not None
+        if cur['stage'] == 4:
+            assert trig['down'] is None and trig['up'] is not None
+        if cur['stage'] in (1, 3):
+            assert trig['up']['to'] == 2 and trig['down']['to'] == 4
+        for side, g in trig.items():
+            if g:
+                assert (g['level'] >= c.iloc[-1] * 0.5) and g['name'].startswith('Stage ')
+
+
+def test_chart_draws_the_two_triggers_and_nothing_from_the_old_cycle():
+    import cycle_page as cpg
+    r = cy.analyse(path([(400, -0.45), (700, 1.4), (230, -0.24)], noise=0.006),
+                   threshold=0.35, today=TODAY)
+    html = cpg.chart_card(r)
+    for g in r['stage']['current']['triggers'].values():
+        if g:
+            assert f'{g["level"]:,.2f}' in html
+    assert 'stroke-dasharray="6,4"' not in html          # the old trigger line
+    assert cpg.BEAR_FILL not in html                      # the old bear shading
