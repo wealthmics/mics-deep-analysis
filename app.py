@@ -638,13 +638,14 @@ def render_landing(st, feed, sector_stats, screener_url=FEED_BASE):
             if row[5].button('Cycle', key=f'cy_{isin}'):
                 open_cycle(e.get('ticker'), isin, e.get('ccy'))
 
-    st.markdown(pg.section('Stock cycle', 'bull and bear phases, levels, holding periods'),
+    st.markdown(pg.section('Stock cycle', 'stage now, what usually comes next, levels, past cycles'),
                 unsafe_allow_html=True)
     c1, c2 = st.columns([4, 1])
-    c1.markdown(pg.lede('Where a stock sits in its own price cycle: the current phase and the '
-                        'close that would end it, its support and resistance, and how long its '
-                        'past cycles lasted. Use the Cycle button beside any search result, or '
-                        'open the cycle page and search there.'), unsafe_allow_html=True)
+    c1.markdown(pg.lede('Where a stock is now (Basing, Advancing, Topping or Declining), what '
+                        'has usually followed that stage for this stock, the price levels that '
+                        'would change it, and how its past cycles played out. Use the Cycle '
+                        'button beside any search result, or open the cycle page and search '
+                        'there.'), unsafe_allow_html=True)
     if c2.button('Open stock cycle', key='land_cycle', use_container_width=True):
         st.query_params.clear()
         st.query_params['view'] = 'cycle'
@@ -975,11 +976,11 @@ def render_cycle_home():
         '</div><div class="quote"><div class="eyebrow"><a class="back" href="?" '
         'target="_self">Company search</a></div></div></div></div>', unsafe_allow_html=True)
     st.markdown(pg.lede(
-        'Pick a company to see where it sits in its own price cycle. A phase changes only when '
-        'the price moves by a set amount from its last high or low, sized to how volatile that '
-        'stock normally is. The page shows the current phase and the close that would end it, '
-        'the nearest support and resistance, and how long past cycles lasted, with every '
-        'limitation stated alongside.'), unsafe_allow_html=True)
+        'Pick a company to see where it is now and what usually comes next. The stage (1 '
+        'Basing, 2 Advancing, 3 Topping, 4 Declining) is read from weekly closes against the '
+        '30-week average, with the 50-day EMA as the early warning. Below it, the big swings '
+        'of the past show how long cycles lasted and what a holder captured, with the levels '
+        'to watch and every limitation stated alongside.'), unsafe_allow_html=True)
     try:
         feed = load_tv_feed()
     except Exception as e:
@@ -1263,8 +1264,8 @@ def run_company(ticker, isin, ccy):
 
 
 # The app's own modules, in the order they depend on each other.
-OWN_MODULES = ['risk', 'page', 'cycle', 'deck', 'competitors', 'cycle_page', 'comp_exports',
-               'cycle_exports', 'exports']
+OWN_MODULES = ['risk', 'page', 'stages', 'cycle', 'deck', 'competitors', 'cycle_page',
+               'comp_exports', 'cycle_exports', 'exports']
 
 
 def refresh_modules():

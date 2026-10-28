@@ -10,7 +10,9 @@ behaved: how often phases changed, how many holds were whipsaws (out within thre
 at a loss), what a holder captured, and what the page would say today. The summary at the
 end is what to look at when choosing THRESHOLD_MULT and the cap in cycle.py: a good
 setting gives most stocks one to three full cycles a decade, few whipsaws, and few stocks
-sitting in a phase the trend has disagreed with for a long time.
+sitting in a phase the trend has disagreed with for a long time. The stage columns do not
+depend on the multiple; they show how often the stage changes (about twice a year is
+normal) and how many stages lasted four weeks or less (should stay small).
 
 Needs network access to Yahoo. Uses the same price fetch and disk cache as the app.
 """
@@ -49,6 +51,9 @@ def one(symbol, mults):
         holds = r['holdings']
         whips = sum(1 for h in holds if h['months'] < 3 and h['total_return'] < 0)
         tr = r['trend'] or {}
+        sgr = r.get('stage') or {}
+        eps = [] if sgr.get('error') else sgr.get('episodes', [])
+        stage_years = ((eps[-1]['end'] - eps[0]['start']).days / 365.25) if eps else None
         out.append({
             'symbol': symbol, 'mult': m, 'error': '',
             'years': round(years, 1),
@@ -66,6 +71,10 @@ def one(symbol, mults):
             'state': r['current'].get('state'),
             'status': r['status']['label'],
             'trend': tr.get('direction'),
+            'stage': sgr['current']['stage'] if eps else None,
+            'stage_changes_per_year': round(len(eps) / stage_years, 2) if stage_years else None,
+            'short_stage_share': round(sum(1 for e in eps if e['weeks'] <= 4 and not e['open'])
+                                       / len(eps), 2) if eps else None,
             'confidence': r['confidence']['level'],
             'data_warnings': sum(1 for c in r['checks'] if c['level'] == 'warn'),
         })
@@ -87,6 +96,8 @@ def summary(df):
             if g['median_captured'].notna().any() else None,
             'share where trend disagrees now': round(float(
                 g['status'].str.contains('correcting|rebounding').mean()), 2),
+            'median stage changes/year': round(float(g['stage_changes_per_year'].median()), 2),
+            'share of stages 4 weeks or less': round(float(g['short_stage_share'].median()), 2),
         })
     return pd.DataFrame(rows)
 

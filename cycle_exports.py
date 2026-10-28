@@ -33,37 +33,108 @@ def _mo(x):
     return '-' if x is None else f'{x:.1f}'
 
 
+def stage_rows(r):
+    """The stage and the short-term picture, as (measure, value, detail)."""
+    sgr = r.get('stage') or {}
+    if not sgr or sgr.get('error'):
+        return [('Stage', 'n/a', (sgr or {}).get('error', ''))]
+    c, sh = sgr['current'], sgr['short']
+    slope = ('rising' if c['slope'] > c['band'] else 'falling' if c['slope'] < -c['band']
+             else 'flat')
+    rows = [('Stage', f'{c["stage"]}, {c["name"]}', f'since week of {cpg.day(c["start"])}'),
+            ('Weeks in this stage', str(c['weeks']), ''),
+            ('Last finished week', _p(c['close']), cpg.day(c['week'])),
+            ('30-week average', _p(c['ma']), f'{slope}, {_pc(c["slope"])} in 5 weeks'),
+            ('50-day EMA', _p(sh['ema_level']), f'price {"above" if sh["above_ema"] else "below"} it')]
+    if sh.get('sma_level') is not None:
+        cross = ''
+        if sh.get('cross_date') is not None:
+            cross = f'{sh["cross_kind"]} cross on {cpg.day(sh["cross_date"])}'
+        rows.append(('50-day EMA vs 200-day', 'above' if sh['ema_over_sma'] else 'below', cross))
+    rows += [('From 52-week high', _pc(sh['from_high52']), _p(sh['high52'])),
+             ('From 52-week low', _pc(sh['from_low52']), _p(sh['low52']))]
+    run = c.get('running')
+    if run and run['raw']:
+        rows.append(('This week so far', run['raw'], f'{_p(run["close"])} on {cpg.day(run["date"])}'))
+    return rows
+
+
+def confidence_rows(r):
+    rows = [('Confidence', r['confidence']['level'], '')]
+    for why in r['confidence']['reasons']:
+        rows.append(('  reason', '', why))
+    return rows
+
+
 def now_rows(r):
-    """Where the stock is now, as (measure, value, detail)."""
-    cur, T = r['current'], r['threshold']
+    """The big swing, as (measure, value, detail)."""
+    cur, T, F = r['current'], r['threshold'], r['fall']
     if not cur.get('state'):
-        return [('Phase', 'None yet', f'no move of {_pc(T, False)} since '
-                                      f'{cpg.day(r["first_date"])}'),
+        return [('Big swing', 'None yet', f'no move of {_pc(F, False)} down or {_pc(T, False)} '
+                                          f'up since {cpg.day(r["first_date"])}'),
                 ('Latest close', _p(cur['last_price']), cpg.day(cur['last_date']))]
     bull = cur['state'] == 'bull'
-    rows = [('Status', r['status']['label'], f'confidence {r["confidence"]["level"].lower()}'),
-            ('Phase', 'Bull' if bull else 'Bear', 'confirmed'),
+    need = F if bull else T
+    rows = [('Big swing', r['status']['label'], 'confirmed'),
             ('Started', _p(cur['start_price']),
              f'{"low" if bull else "high"} on {cpg.day(cur["start"])}'),
             ('Confirmed', _p(cur['confirm_price']), f'close on {cpg.day(cur["confirm_date"])}'),
             ('Length so far', f'{cur["months"]:.1f} months', ''),
-            ('Move since it started', _pc(cur['change']), ''),
             (f'{"Highest" if bull else "Lowest"} close since', _p(cur['extreme']),
              cpg.day(cur['extreme_date'])),
             ('Latest close', _p(cur['last_price']), cpg.day(cur['last_date'])),
             ('From the high' if bull else 'From the low', _pc(cur['from_extreme']),
-             f'{abs(cur["from_extreme"]) / T * 100:.0f}% of the {_pc(T, False)} threshold'),
-            ('Trend', cpg.trend_text(r['trend']).replace('\u2212', '-'), '200-day average'),
-            (f'Phase ends on a close {"below" if bull else "above"}', _p(cur['trigger']),
-             f'{"high minus" if bull else "low plus"} {_pc(T, False)}'),
+             f'{abs(cur["from_extreme"]) / need * 100:.0f}% of the {_pc(need, False)} '
+             f'{"fall" if bull else "rise"} that ends it'),
+            (f'Ends on a close {"below" if bull else "above"}', _p(cur['trigger']),
+             f'{"high minus" if bull else "low plus"} {_pc(need, False)}'),
             ('Distance to that level', _pc(cur['to_trigger']), '')]
     if bull and cur.get('held_return') is not None:
         rows.append(('Held since confirmation', _pc(cur['held_return']),
                      f'{cur["held_months"]:.1f} months, dividends included'))
-    rows.append(('Confidence', r['confidence']['level'], ''))
-    for why in r['confidence']['reasons']:
-        rows.append(('  reason', '', why))
     return rows
+
+
+def outlook_rows(r):
+    o = r.get('outlook')
+    if not o:
+        return []
+    rows = []
+    for title, key in (('Now', 'now'), ('What came next before', 'next'),
+                       ('What would turn it up', 'up'), ('What would turn it down', 'down'),
+                       ('Read this first', 'caveat')):
+        for i, x in enumerate(o[key]):
+            rows.append((title if i == 0 else '', '', x))
+    return rows
+
+
+def stage_stat_rows(r):
+    sgr = r.get('stage') or {}
+    if not sgr or sgr.get('error'):
+        return []
+    out = []
+    for k in (1, 2, 3, 4):
+        d = sgr['stats'][k]
+        w, f13, f26 = d['weeks'], d['forward'][13], d['forward'][26]
+        nxt = ', '.join(f'{j}: {v}' for j, v in sorted(d['next'].items(), key=lambda kv: -kv[1]))
+        out.append([f'{k}, {cpg.sg.NAMES[k]}', d['count'],
+                    f'{w["median"]:.0f}' if w['n'] else '-',
+                    f'{w["p25"]:.0f} to {w["p75"]:.0f}' if w['n'] else '-', nxt or '-',
+                    f'{f13["up"]} of {f13["n"]}' if f13['n'] else '-',
+                    _pc(f13['median']) if f13['n'] else '-',
+                    f'{f26["up"]} of {f26["n"]}' if f26['n'] else '-',
+                    _pc(f26['median']) if f26['n'] else '-'])
+    return out
+
+
+def stage_episode_rows(r):
+    sgr = r.get('stage') or {}
+    if not sgr or sgr.get('error'):
+        return []
+    return [[f'{e["stage"]}, {cpg.sg.NAMES[e["stage"]]}' + (' (open)' if e['open'] else ''),
+             cpg.day(e['start']), cpg.day(e['end']), e['weeks'], _p(e['start_price']),
+             _p(e['end_price']), _pc(e['end_price'] / e['start_price'] - 1)]
+            for e in sgr['episodes'] if not e['first']][::-1]
 
 
 def level_rows(r):
@@ -78,9 +149,10 @@ def level_rows(r):
     if r['inside']:
         out.append(('Latest close sits inside', cpg.zone_text(r['inside']), ''))
     years = (r['last_date'] - r['first_date']).days / 365.25
-    out += [('Threshold', _pc(r['threshold'], False),
+    out += [('Rise threshold', _pc(r['threshold'], False),
              f'median annual volatility over the last {r.get("threshold_years", cy.THRESHOLD_YEARS)} '
              f'years, kept between 15% and 35%'),
+            ('Fall threshold', _pc(r['fall'], False), 'the same move in log terms'),
             ('Market used for market-wide falls', r.get('bench_name') or 'S&P 500', ''),
             ('History used', f'{years:.1f} years', f'from {cpg.day(r["first_date"])}'),
             ('Completed phases', str(len(r['phases'])),
@@ -156,33 +228,87 @@ def build_pptx(r, meta):
     last = cpg.day(r['last_date'])
     deck = Deck(f'MICS International   |   {name}   |   Stock cycle, prices to {last}')
     cur = r['current']
+    hl = cpg.headline(r)
     if cur.get('state'):
-        state_line = (f'{"Bull" if cur["state"] == "bull" else "Bear"} phase since '
-                      f'{cpg.day(cur["start"])}, ends on a close '
+        state_line = (f'Big {cur["state"]} swing since {cpg.day(cur["start"])}, ends on a close '
                       f'{"below" if cur["state"] == "bull" else "above"} {_p(cur["trigger"])}')
     else:
-        state_line = 'No phase confirmed yet'
+        state_line = 'No big swing confirmed yet'
+    if hl:
+        state_line = f'{hl}.   {state_line}'
     deck.cover(name, ['Stock cycle', state_line,
                       f'{_meta_line(meta)}   |   Prices to {last}   |   '
                       f'Prepared by MICS International'])
 
     # where it stands
-    s = deck.content(f'Where {name} stands in its cycle')
-    deck.text(s, X0, 1.4, CW, 0.9, plain(cpg.reading(r)), size=12, color=NAVY)
-    rows = [['Where the stock is now', 'Value', '']] + [list(x) for x in now_rows(r)]
-    deck.table(s, X0, 2.45, [2.75, 1.25, 2.0], rows, size=10.5, rowh=0.38,
+    s = deck.content(f'Where {name} stands now',
+                     f'{hl or "No stage yet"}. Confidence {r["confidence"]["level"].lower()}.')
+    rows = [['Stage and short-term trend', 'Value', '']] + [list(x) for x in stage_rows(r)]
+    deck.table(s, X0, 1.85, [2.6, 1.35, 2.05], rows, size=10.5, rowh=0.38,
                aligns=['l', 'r', 'l'])
+    rows = [['The big swing', 'Value', '']] + [list(x) for x in now_rows(r)]
+    deck.table(s, 6.9, 1.85, [2.2, 1.35, 2.283], rows, size=10.5, rowh=0.38,
+               aligns=['l', 'r', 'l'])
+
+    # what usually comes next
+    o = r.get('outlook')
+    if o:
+        s = deck.content('What usually comes next, and what to watch',
+                         'Built only from this stock\'s own past stages and today\'s levels. '
+                         'Not a forecast.')
+        cols = (('What came next before', o['next']),
+                ('What would turn it up', o['up'] + [''] + ['What would turn it down']
+                 + o['down']))
+        for k, (title, items) in enumerate(cols):
+            lines = [(title, {'bold': True, 'color': NAVY, 'size': 12})]
+            for x in items:
+                if x == 'What would turn it down':
+                    lines.append((x, {'bold': True, 'color': NAVY, 'size': 12, 'space': 6}))
+                elif x:
+                    lines.append((x, {'size': 10.5, 'space': 4}))
+            deck.text(s, X0 + k * (CW / 2), 1.85, CW / 2 - 0.25, 4.5, lines, size=10.5)
+        deck.text(s, X0, 6.45, CW, 0.4, ' '.join(o['caveat']), size=9.5, color=NAVY)
+
+    # every stage
+    srows = stage_stat_rows(r)
+    if srows:
+        s = deck.content('Every stage this stock has been through',
+                         'How each stage usually behaved, counted from the week it began. '
+                         'Went next to counts which stage followed.')
+        rows = [['Stage', 'Past runs', 'Median weeks', 'Middle half', 'Went next to',
+                 'Higher 13w on', 'Median 13w', 'Higher 26w on', 'Median 26w']] + srows
+        deck.table(s, X0, 1.85, [1.6, 0.95, 1.2, 1.3, 1.6, 1.3, 1.2, 1.3, 1.233], rows,
+                   size=10.5, rowh=0.42)
+        eps = stage_episode_rows(r)[:8]
+        if eps:
+            rows = [['Stage', 'From week of', 'To week of', 'Weeks', 'Start', 'End', 'Change']] + eps
+            deck.table(s, X0, 4.2, [2.0, 1.7, 1.7, 1.0, 1.3, 1.3, 1.3], rows, size=9.5,
+                       rowh=0.3)
+
+    # levels, the rule and confidence
+    s = deck.content('Levels, the rule and how much to trust this reading')
     rows = [['Levels and the rule', 'Value', '']] + [list(x) for x in level_rows(r)]
-    deck.table(s, 6.9, 2.45, [2.2, 1.35, 2.283], rows, size=10.5, rowh=0.38,
+    deck.table(s, X0, 1.85, [2.4, 1.35, 2.25], rows, size=10.5, rowh=0.38,
                aligns=['l', 'r', 'l'])
+    lines = [(f'Confidence: {r["confidence"]["level"]}', {'bold': True, 'color': NAVY,
+                                                         'size': 12})]
+    for why in r['confidence']['reasons']:
+        lines.append((why[0].upper() + why[1:], {'size': 10.5, 'space': 4}))
+    deck.text(s, 6.9, 1.85, 5.9, 4.8, lines, size=10.5)
 
     # the chart
     m = monthly(r)
     if len(m) > 12:
         series = [('Close', list(m.values), NAVY, 2, False)]
         if cur.get('trigger'):
-            series.append(('Trigger that ends the phase', [cur['trigger']] * len(m), GOLD, 1.5,
-                           True))
+            series.append(('Trigger that ends the big swing', [cur['trigger']] * len(m), GOLD,
+                           1.5, True))
+        sgr = r.get('stage') or {}
+        if sgr and not sgr.get('error'):
+            ma = sgr['ma_daily'].reindex(m.index, method='ffill')
+            if ma.notna().sum() > 12:
+                series.append(('30-week average', [None if pd.isna(v) else float(v) for v in ma],
+                               '3F6AA8', 1.25, True))
         if r['support']:
             series.append(('Nearest support', [r['support']['high']] * len(m), UP, 1.25, False))
         if r['resistance']:
@@ -303,12 +429,35 @@ def build_xlsx(r, meta):
     ws = book.sheet('Summary', widths=(34, 16, 46))
     rr = book.title(ws, f'{name}: stock cycle', f'{_meta_line(meta)}   |   Prices to {last}')
     rr = book.note(ws, rr, plain(cpg.reading(r)), 3, chars=95)
-    rr = book.heading(ws, rr, 'Where the stock is now')
+    rr = book.heading(ws, rr, 'Stage and short-term trend')
+    rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], stage_rows(r),
+                    aligns=['left', 'right', 'left'])
+    rr = book.heading(ws, rr, 'What usually comes next, and what to watch')
+    rr = book.table(ws, rr, ['Section', '', 'Detail'], outlook_rows(r),
+                    aligns=['left', 'left', 'left'], wrap_cols=(2,))
+    rr = book.heading(ws, rr, 'How much to trust this reading')
+    rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], confidence_rows(r),
+                    aligns=['left', 'right', 'left'], wrap_cols=(2,))
+    rr = book.heading(ws, rr, 'The big swing')
     rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], now_rows(r),
                     aligns=['left', 'right', 'left'])
     rr = book.heading(ws, rr, 'Support, resistance and the rule')
     book.table(ws, rr, ['Measure', 'Value', 'Detail'], level_rows(r),
                aligns=['left', 'right', 'left'])
+
+    # ---- Stages
+    srows = stage_stat_rows(r)
+    if srows:
+        ws = book.sheet('Stages', widths=(22, 10, 13, 13, 18, 14, 13, 14, 13))
+        rr = book.title(ws, 'Every stage this stock has been through',
+                        'How each stage usually behaved, counted from the week it began, then '
+                        'every stage, most recent first.')
+        rr = book.table(ws, rr, ['Stage', 'Past runs', 'Median weeks', 'Middle half',
+                                 'Went next to', 'Higher 13w on', 'Median 13w', 'Higher 26w on',
+                                 'Median 26w'], srows)
+        rr = book.heading(ws, rr + 1, 'Every stage')
+        book.table(ws, rr, ['Stage', 'From week of', 'To week of', 'Weeks', 'Start', 'End',
+                            'Change'], stage_episode_rows(r))
 
     # ---- Typical cycle, as numbers
     ws = book.sheet('Typical cycle', widths=(36, 12, 12, 12, 9, 14, 12, 12, 9))

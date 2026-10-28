@@ -5,10 +5,16 @@ One rule, applied the same way to the past and to today, so the history and the 
 reading can never disagree and a confirmed turning point never moves when new prices
 arrive:
 
-    A bull phase ends when the price closes at least the threshold below the highest close
+    A bull phase ends when the price closes the fall threshold below the highest close
     since the last trough. That high is then a confirmed peak.
-    A bear phase ends when the price closes at least the threshold above the lowest close
+    A bear phase ends when the price closes the rise threshold above the lowest close
     since the last peak. That low is then a confirmed trough.
+
+The two are the same distance in log terms: a fall of F = T / (1 + T) is undone by a rise
+of T. A 35% rise threshold therefore needs a 25.9% fall, not a 35% one, because a 35% fall
+needs a 54% rise to recover. Using the same percentage both ways made bear phases much
+harder to confirm than bull phases, which is how a stock 30% off its high could still read
+as a bull phase.
 
 The threshold is the stock's typical annual volatility over the last five years, kept between
 15% and 35%, so a utility and a semiconductor are each measured on their own scale, and a
@@ -39,6 +45,7 @@ import numpy as np
 import pandas as pd
 
 import risk as rk
+import stages as sg
 
 THRESHOLD_FLOOR, THRESHOLD_CAP = 0.15, 0.35
 ZONE_BAND = 0.04            # turning points within 4% of each other form one zone
@@ -50,6 +57,12 @@ DAYS_PER_MONTH = 30.4375
 
 THRESHOLD_YEARS = 5         # volatility measured over this many recent years
 THRESHOLD_MULT = 1.0        # threshold = multiple x volatility; calibrate.py tests other values
+LOG_SYMMETRIC = True        # fall threshold = T / (1 + T), the same log move as a rise of T
+
+
+def fall_for(threshold):
+    """The fall that ends a bull phase, for a rise threshold T."""
+    return threshold / (1 + threshold) if LOG_SYMMETRIC else threshold
 
 TREND_DAYS = 200            # the trend is the 200-day average of traded closes
 TREND_SLOPE_DAYS = 21       # its direction is its change over the last month
@@ -151,7 +164,7 @@ def turning_points(close, threshold):
     turn there is no phase at all, because the history begins in the middle of one.
     """
     dates, vals = list(close.index), [float(v) for v in close.values]
-    up, down = 1 + threshold, 1 - threshold
+    up, down = 1 + threshold, 1 - fall_for(threshold)
     state, points = None, []
     hi = lo = vals[0]
     hi_i = lo_i = 0
@@ -311,13 +324,14 @@ def status_of(current, trend, threshold):
                 'reasons': []}
     trend_dir = trend['direction'] if trend else None
     move = abs(current['from_extreme'])
-    deep = move >= CORRECTION_SHARE * threshold
+    need = fall_for(threshold) if state == 'bull' else threshold
+    deep = move >= CORRECTION_SHARE * need
     reasons = []
     if state == 'bull':
         against = trend_dir == 'down'
         if deep:
-            reasons.append(f'it is {move * 100:.0f}% below the phase high, more than half the '
-                           f'{threshold * 100:.0f}% fall that would end the phase')
+            reasons.append(f'it is {move * 100:.0f}% below the swing high, more than half the '
+                           f'{need * 100:.0f}% fall that would end the swing')
         if against:
             reasons.append('it is below a 200-day average that is no longer rising')
         qualifier = 'correcting' if (deep or against) else None
@@ -325,14 +339,14 @@ def status_of(current, trend, threshold):
     else:
         against = trend_dir == 'up'
         if deep:
-            reasons.append(f'it is {move * 100:.0f}% above the phase low, more than half the '
-                           f'{threshold * 100:.0f}% rise that would end the phase')
+            reasons.append(f'it is {move * 100:.0f}% above the swing low, more than half the '
+                           f'{need * 100:.0f}% rise that would end the swing')
         if against:
             reasons.append('it is above a 200-day average that is no longer falling')
         qualifier = 'rebounding' if (deep or against) else None
         tone = 'mixed' if qualifier else 'down'
     near = abs(current['to_trigger']) <= NEAR_TRIGGER
-    label = f'{state.title()} phase' + (f', {qualifier}' if qualifier else '')
+    label = f'{state.title()} swing' + (f', {qualifier}' if qualifier else '')
     return {'label': label, 'tone': tone, 'qualifier': qualifier, 'near': near,
             'reasons': reasons}
 
@@ -386,24 +400,38 @@ def confidence_of(r):
     trend pointing against the phase."""
     cur, st = r['current'], r['status']
     low, medium = [], []
+    sgr = r.get('stage') or {}
+    if sgr.get('error'):
+        medium.append('not enough weekly history for a stage reading')
+    elif sgr:
+        sc = sgr['current']
+        total = sum(sgr['stats'][sc['stage']]['next'].values())
+        if total < sg.MIN_CASES:
+            medium.append(f'{"no" if total == 0 else "only " + str(total)} past '
+                          f'exit{"s" if total != 1 else ""} from Stage {sc["stage"]} in the record '
+                          f'to learn what usually comes next')
+        run = sc.get('running')
+        if run and run['raw'] and run['raw'] != sc['raw']:
+            medium.append('this week so far reads differently from the last finished week')
+        if cur.get('state') and ((sc['stage'] == 4 and cur['state'] == 'bull') or
+                                 (sc['stage'] == 2 and cur['state'] == 'bear')):
+            medium.append(f'the stage (Stage {sc["stage"]}) and the big {cur["state"]} swing point '
+                          f'opposite ways: the move has turned but not yet far enough to end '
+                          f'the big swing')
     for c in r['checks']:
         if c['level'] == 'warn':
             low.append(c['text'])
     if cur.get('state'):
         key = 'bull_months' if cur['state'] == 'bull' else 'bear_months'
         n = r['all'][key]['n']
-        if n == 0:
-            medium.append(f'no completed {cur["state"]} phase yet to compare the current one with')
-        elif n < MIN_CYCLES:
-            medium.append(f'only {n} completed {cur["state"]} phase{"s" if n != 1 else ""} to '
-                          f'compare the current one with')
+        if n < MIN_CYCLES:
+            medium.append(f'{"no completed big " + cur["state"] + " swing" if n == 0 else "only " + str(n) + " completed big " + cur["state"] + " swing" + ("s" if n != 1 else "")} '
+                          f'in the record to compare with')
         if st['near']:
             medium.append(f'the price is within {NEAR_TRIGGER * 100:.0f}% of the level that '
-                          f'ends the phase, so it could change on any day')
-        if st['qualifier']:
-            medium.append('the price is moving against the phase: ' + ', and '.join(st['reasons']))
+                          f'ends the big {cur["state"]} swing, so it could change on any day')
     else:
-        medium.append('no phase has been confirmed yet')
+        medium.append('no big swing has been confirmed yet')
     if r['trend'] is None:
         medium.append('not enough history for a 200-day trend')
     level = 'Low' if low else 'Medium' if medium else 'High'
@@ -546,6 +574,11 @@ def analyse(hist, bench=None, threshold=None, bench_name=None, today=None,
          'threshold_years': min(THRESHOLD_YEARS, max(1, (len(close) - 1) // 252)),
          'first_date': close.index[0], 'last_date': close.index[-1],
          'trend': trend, 'status': status_of(current, trend, threshold),
-         'checks': data_checks(close, today)}
+         'checks': data_checks(close, today),
+         'fall': fall_for(threshold)}
+    r['stage'] = sg.analyse(close, today)
+    if not r['stage'].get('error'):
+        r['outlook'] = sg.outlook(r['stage'], current if current.get('state') else None,
+                                  support, resistance)
     r['confidence'] = confidence_of(r)
     return r
