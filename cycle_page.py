@@ -54,6 +54,13 @@ def card(title, body, sub=''):
 
 # ---------------------------------------------------------------- chart ------------------
 TREND_LINE = '#3f6aa8'
+# the ranges the chart offers, in trading days, as on the company page plus one month
+SPANS = {'1M': 21, '3M': 63, '6M': 126, '1Y': 252, '2Y': 504, '5Y': 1260, '10Y': 2520,
+         'Max': None}
+DEFAULT_SPAN = '1Y'
+# a level further than this beyond the prices in view is pinned to the edge of the chart
+# as a label, instead of stretching the scale until the price line goes flat
+ZOOM = 1.25
 
 
 def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), stage_daily=None,
@@ -69,6 +76,13 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
     t0, t1 = s.index[0], s.index[-1]
     span_t = max(1, (t1 - t0).days)
     levels = [float(v) for v in s.values]
+    pmin, pmax = min(levels), max(levels)
+
+    def near(v):
+        return pmin / ZOOM <= v <= pmax * ZOOM
+    zones = [zz for zz in zones if near(zz[0]['low']) or near(zz[0]['high'])]
+    pinned = [m for m in marks if not near(m[1])]
+    marks = [m for m in marks if near(m[1])]
     extra = [z['low'] for z, _, _ in zones] + [z['high'] for z, _, _ in zones]
     extra += [m[1] for m in marks]
     lo = math.log(min(levels + extra))
@@ -181,7 +195,7 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
     mid = math.exp((hi + lo) / 2)
     yaxis = (f'<span class="hi">{px(math.exp(hi))}</span><span class="mid">{px(mid)}</span>'
              f'<span class="lo">{px(math.exp(lo))}</span>')
-    fmt = '%Y' if span_t > 365 * 8 else '%b %Y'
+    fmt = '%Y' if span_t > 365 * 8 else '%b %Y' if span_t > 120 else '%d %b'
     dates = []
     for t in range(6):
         when = t0 + pd.Timedelta(days=t / 5 * span_t)
@@ -197,8 +211,13 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
                  f'border-color:{edge}">{word} {px(level)}</span>')
     for _, level, colour, label in marks:
         top_pct = max(0.0, min(100.0, y(level) / height * 100))
-        tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:{colour};'
-                 f'border-color:{colour};left:auto;right:58px">{esc(label)}</span>')
+        tags += (f'<span class="cylab" title="{esc(label)}" style="top:{top_pct:.2f}%;'
+                 f'color:{colour};border-color:{colour};left:auto;right:58px">{px(level)}</span>')
+    for _, level, colour, label in pinned:
+        above = level > pmax
+        tags += (f'<span class="cylab" title="{esc(label)}, outside this range" '
+                 f'style="top:{2 if above else 96}%;color:{colour};border-color:{colour};'
+                 f'left:auto;right:58px">{"&#8593;" if above else "&#8595;"} {px(level)}</span>')
     return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{"".join(parts)}{tags}</div>'
             f'<div class="xaxis">{"".join(dates)}</div>')
 
@@ -234,7 +253,7 @@ def stage_triggers(r):
 
 def trigger_label(g, side):
     arrow = '&#9650;' if side == 'up' else '&#9660;'
-    return f'{arrow} {g["name"]} {"above" if side == "up" else "below"} {px(g["level"])}'
+    return f'{arrow} {g["name"]}: {px(g["level"])}'
 
 
 def trigger_marks(r):
@@ -260,10 +279,10 @@ def trigger_legend(r):
         if g:
             spans.append(f'<span><i style="background:repeating-linear-gradient(90deg,{colour} 0 '
                          f'2px,transparent 2px 5px);height:2px"></i>{trigger_label(g, side)}'
-                         f'{" (moves weekly)" if g["moves"] else ""}</span>')
+                         f'{", moves weekly" if g["moves"] else ""}</span>')
     if not spans:
         return ''
-    return ('<div class="clegend"><span><b>Stage triggers</b> (2 weekly closes)</span>'
+    return ('<div class="clegend"><span><b>Stage triggers</b>, 2 weekly closes beyond</span>'
             + ''.join(spans) + '</div>')
 
 
@@ -279,31 +298,40 @@ def stage_daily(r):
     return sgr['weekly']['stage'].reindex(r['close'].index, method='ffill').to_dict()
 
 
+def chart_spans(close):
+    """Every range the history can fill, shortest first. A range is offered only when there
+    is more history than it covers, so no two ranges draw the same chart."""
+    out = [(lab, close.tail(n)) for lab, n in SPANS.items() if n is not None and len(close) > n]
+    out.append(('Max', close))
+    return out
+
+
 def chart_card(r):
-    """Two ranges, switched in the browser with the same radio and CSS trick as the company
-    page. Five years shows the levels that matter now; the full record shows every cycle."""
+    """Every range from one month to the full record, all drawn now and switched in the
+    browser with the same radio and CSS trick as the company page, so changing the range
+    needs no reload."""
     close, cur = r['close'], r['current']
     shown = [(z, fill, edge) for z, fill, edge in ((r['support'], SUPPORT_FILL, UP),
                                                    (r['resistance'], RESIST_FILL, DOWN)) if z]
-    ranges = [('5Y', close.loc[close.index[-1] - pd.DateOffset(years=5):]), ('Max', close)]
-    if len(ranges[0][1]) > len(close) * 0.9:
-        ranges = [('Max', close)]
-    current = ranges[0][0]
+    ranges = chart_spans(close)
+    labels = [lab for lab, _ in ranges]
+    current = DEFAULT_SPAN if DEFAULT_SPAN in labels else labels[-1]
+    lines, eps, sd, marks = chart_lines(r), stage_eps(r), stage_daily(r), trigger_marks(r)
     tabs, panels = [], []
     for lab, win in ranges:
         on = ' on' if lab == current else ''
-        word = 'Last five years' if lab == '5Y' else 'Full record'
         tabs.append(f'<label class="sbtn{on}"><input type="radio" name="cyspan" '
-                    f'class="si-{lab}">{word}</label>')
+                    f'class="si-{lab}">{lab}</label>')
         panels.append(f'<div class="spanpanel sp-{lab}{on}">'
-                      + svg_cycle(win, r['points'], cur, r['phases'], shown, chart_lines(r),
-                                  stage_eps(r), stage_daily(r), trigger_marks(r)) + '</div>')
+                      + svg_cycle(win, r['points'], cur, r['phases'], shown, lines, eps, sd,
+                                  marks) + '</div>')
     body = (LEGEND + trigger_legend(r) + f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
             f'{"".join(panels)}</div>'
             '<div class="smallnote">Hover over the chart for the date, close and stage, over a '
             'marker for a past turning point, and over the strip along the bottom for each '
-            'stage\'s dates. The dotted lines are the levels that would change the stage, drawn '
-            'from the week the current stage began.</div>')
+            'stage\'s dates. The dotted lines are the two levels that would change the stage; '
+            'when one is far outside the range in view, its price is pinned to the top or bottom '
+            'edge with an arrow.</div>')
     return card('Price, stages and the two triggers', body,
                 f'{day(r["first_date"])} to {day(r["last_date"])}. Traded prices, adjusted '
                 f'for splits, not for dividends.')
@@ -813,6 +841,7 @@ def limitations_card():
 # room on both sides and only the horizontal rules stay. Tables of figures keep each value on
 # one line; only the measure names wrap.
 CY_CSS = """<style>
+.an .spanset:has(.si-1M:checked) .sp-1M{display:block}
 .an.cy table{border:none}
 .an.cy th,.an.cy td{padding:9px 10px;border-left:none;border-right:none;border-top:none}
 .an.cy th:first-child,.an.cy td:first-child{padding-left:0}
