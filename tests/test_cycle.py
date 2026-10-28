@@ -128,8 +128,8 @@ def test_uber_case_leads_with_the_stage():
     import cycle_page as cpg
     assert cpg.headline(r) == 'Stage 4, Declining'
     trig = r['stage']['current']['triggers']
-    assert trig['down'] is None                    # in Stage 4 a fall only continues it
-    assert trig['up'] is not None and trig['up']['to'] in (1, 3)
+    assert trig and all(g['side'] == 'up' for g in trig)    # in Stage 4 a fall continues it
+    assert {g['to'] for g in trig} <= {1, 2, 3}
     assert r['outlook']['up'] and r['outlook']['down']
 
 
@@ -231,7 +231,7 @@ def test_page_and_exports_build():
     r = cy.analyse(uber_like(), threshold=0.35, today=TODAY, bench_name='S&P 500')
     html = cpg.build(r, 'Test Co', 'TEST', 'NYSE', 'USD', None, 'ticker=TEST')
     for part in ('Stage ', 'What usually comes next', 'How much to trust this reading',
-                 '50-day EMA', 'Stage triggers', 'Turns to Stage',
+                 '50-day EMA', 'Stage triggers',
                  'Every stage this stock has been through', 'Support and resistance'):
         assert part in html
     for gone in ('Big swing', 'big swing', 'Trigger that ends', 'Bull phase', 'Bear phase'):
@@ -371,63 +371,110 @@ def run_table(rows, monkeypatch):
 LONG_BASE = [(100 + (i % 5), 'neutral') for i in range(40)]      # 100 to 104
 
 
-def test_base_has_both_triggers_from_its_range(monkeypatch):
+def by_to(trig):
+    return {(g['side'], g['to']): g for g in trig}
+
+
+def test_base_triggers(monkeypatch):
+    """Stage 1: top of the base to Stage 2, bottom to Stage 4."""
     s = run_table(LONG_BASE, monkeypatch)
-    trig = s['current']['triggers']
-    assert s['current']['stage'] == 1
-    assert trig['up']['to'] == 2 and trig['up']['level'] == 104 and not trig['up']['moves']
-    assert trig['down']['to'] == 4 and trig['down']['level'] == 100
+    trig = by_to(s['current']['triggers'])
+    assert s['current']['stage'] == 1 and set(trig) == {('up', 2), ('down', 4)}
+    assert trig[('up', 2)]['level'] == 104 and trig[('down', 4)]['level'] == 100
+    assert not any(g['moves'] for g in trig.values())
 
 
-def test_breakout_under_test_points_back_to_the_base(monkeypatch):
+def test_top_triggers(monkeypatch):
+    """Stage 3: top of the range back to Stage 2, bottom on to Stage 4."""
+    s = run_table(TOP + [(c, 'neutral') for c in (103, 101, 104, 100) * 8], monkeypatch)
+    trig = by_to(s['current']['triggers'])
+    assert s['current']['stage'] == 3 and set(trig) == {('up', 2), ('down', 4)}
+
+
+def test_advance_under_test_triggers(monkeypatch):
+    """Stage 2 while the breakout is tested: back to Stage 1 through the breakout level,
+    and Stage 4 under a falling average. Nothing on the upside."""
     s = run_table(LONG_BASE + [(105, 'up'), (106, 'up')], monkeypatch)
-    trig, t = s['current']['triggers'], s['current']['testing']
-    assert s['current']['stage'] == 2 and t
-    assert trig['up'] is None
-    assert trig['down']['to'] == 1 and trig['down']['kind'] == 'fail'
-    assert trig['down']['level'] == pytest.approx(t['fail'])
+    c = s['current']
+    trig = by_to(c['triggers'])
+    assert c['stage'] == 2 and c['testing']
+    assert set(trig) == {('down', 1), ('down', 4)}
+    assert trig[('down', 1)]['kind'] == 'fail'
+    assert trig[('down', 1)]['level'] == pytest.approx(c['testing']['fail'])
+    assert trig[('down', 4)]['kind'] == 'average' and trig[('down', 4)]['moves']
+    assert trig[('down', 4)]['needs'] == 'the average is falling'
 
 
-def test_proven_advance_points_down_to_a_top_at_the_average(monkeypatch):
+def test_proven_advance_triggers(monkeypatch):
+    """Stage 2 once proven: one line, the 30-week average, to Stage 3 or 4."""
     s = run_table(LONG_BASE + [(105, 'up'), (106, 'up'), (112, 'up'), (113, 'up')],
                   monkeypatch)
     c = s['current']
-    assert c['stage'] == 2 and c['testing'] is None
-    assert c['triggers']['up'] is None
-    down = c['triggers']['down']
-    assert down['to'] == 3 and down['kind'] == 'average' and down['moves']
-    assert down['level'] == pytest.approx(c['ma'])
+    trig = c['triggers']
+    assert c['stage'] == 2 and c['testing'] is None and len(trig) == 1
+    g = trig[0]
+    assert (g['side'], g['to'], g['alt']) == ('down', 3, 4) and g['moves']
+    assert g['level'] == pytest.approx(c['ma'])
 
 
-def test_every_stage_has_at_most_one_trigger_each_way(monkeypatch):
-    """Whatever the history, the page never shows two levels on the same side."""
+def test_decline_under_test_triggers(monkeypatch):
+    """Stage 4 while the breakdown is tested: the mirror image."""
+    s = run_table(TOP + [(c, 'neutral') for c in (103, 101, 104, 100) * 8]
+                  + [(98, 'down'), (97, 'down')], monkeypatch)
+    c = s['current']
+    trig = by_to(c['triggers'])
+    assert c['stage'] == 4 and c['testing']
+    assert set(trig) == {('up', 3), ('up', 2)}
+    assert trig[('up', 3)]['kind'] == 'fail'
+    assert trig[('up', 2)]['needs'] == 'the average is rising'
+
+
+def test_proven_decline_triggers(monkeypatch):
+    s = run_table(TOP + [(c, 'neutral') for c in (103, 101, 104, 100) * 8]
+                  + [(98, 'down'), (97, 'down'), (90, 'down'), (89, 'down')], monkeypatch)
+    c = s['current']
+    trig = c['triggers']
+    assert c['stage'] == 4 and c['testing'] is None and len(trig) == 1
+    assert (trig[0]['side'], trig[0]['to'], trig[0]['alt']) == ('up', 1, 2)
+
+
+def test_triggers_follow_the_rules_on_any_history():
+    """On random prices the triggers always match the table for the stage the stock is in,
+    and every one is drawn, listed in the key and listed in the card."""
+    import cycle_page as cpg
+    allowed = {1: {('up', 2), ('down', 4)}, 3: {('up', 2), ('down', 4)}}
     for seed in range(40):
         rng = np.random.default_rng(seed)
         c = pd.Series(50 * np.exp(np.cumsum(rng.normal(0.0003, 0.02, 252 * 8))),
                       index=pd.bdate_range(end=TODAY, periods=252 * 8))
-        s = cy.sg.analyse(c, TODAY)
-        cur = s['current']
-        trig = cur['triggers']
-        assert set(trig) == {'up', 'down'}
-        if cur['stage'] == 2:
-            assert trig['up'] is None and trig['down'] is not None
-        if cur['stage'] == 4:
-            assert trig['down'] is None and trig['up'] is not None
-        if cur['stage'] in (1, 3):
-            assert trig['up']['to'] == 2 and trig['down']['to'] == 4
-        for side, g in trig.items():
-            if g:
-                assert (g['level'] >= c.iloc[-1] * 0.5) and g['name'].startswith('Stage ')
+        st = cy.sg.analyse(c, TODAY)
+        cur = st['current']
+        keys = {(g['side'], g['to']) for g in cur['triggers']}
+        if cur['stage'] in allowed:
+            assert keys == allowed[cur['stage']]
+        elif cur['stage'] == 2:
+            assert all(sd == 'down' for sd, _ in keys)
+            assert keys == ({('down', cur['testing']['from']), ('down', 4)} if cur['testing']
+                            else {('down', 3)})
+        else:
+            assert all(sd == 'up' for sd, _ in keys)
+            assert keys == ({('up', cur['testing']['from']), ('up', 2)} if cur['testing']
+                            else {('up', 1)})
+        r = {'stage': st, 'close': c}
+        legend, marks = cpg.trigger_legend(r), cpg.trigger_marks(r)
+        assert len(marks) == len(cur['triggers'])
+        for g in cur['triggers']:
+            assert f'{g["level"]:,.2f}' in legend
 
 
-def test_chart_draws_the_two_triggers_and_nothing_from_the_old_cycle():
+def test_chart_draws_every_trigger_and_nothing_from_the_old_cycle():
     import cycle_page as cpg
     r = cy.analyse(path([(400, -0.45), (700, 1.4), (230, -0.24)], noise=0.006),
                    threshold=0.35, today=TODAY)
     html = cpg.chart_card(r)
-    for g in r['stage']['current']['triggers'].values():
-        if g:
-            assert f'{g["level"]:,.2f}' in html
+    for g in r['stage']['current']['triggers']:
+        assert f'{g["level"]:,.2f}' in html
+        assert cpg.STAGE_LINE[g['to']] in html
     assert 'stroke-dasharray="6,4"' not in html          # the old trigger line
     assert cpg.BEAR_FILL not in html                      # the old bear shading
 
@@ -445,20 +492,42 @@ def test_chart_offers_every_range_the_history_can_fill():
     assert html.count('class="spanpanel') == len(cpg.chart_spans(r['close']))
 
 
-def test_trigger_tags_show_only_the_price_and_far_ones_are_pinned():
+def test_trigger_lines_run_across_the_chart_without_price_tags():
     import re
     import cycle_page as cpg
     r = cy.analyse(path([(400, -0.45), (700, 1.4), (230, -0.24)], noise=0.012), today=TODAY)
     marks = cpg.trigger_marks(r)
     assert marks
-    level = marks[0][1]
-    month = r['close'].tail(21)
-    svg = cpg.svg_cycle(month, r['points'], r['current'], r['phases'], [], (), (), None, marks)
+    win = r['close'].tail(504)
+    svg = cpg.svg_cycle(win, r['points'], r['current'], r['phases'], [], (), (), None, marks)
+    near = [m for m in marks if win.min() / cpg.ZOOM <= m[0] <= win.max() * cpg.ZOOM]
+    lines = re.findall(r'<line x1="0" x2="720" [^>]*stroke-dasharray="7,4"', svg)
+    assert len(lines) == len(near)                     # full width, one per trigger in view
     tags = re.findall(r'<span class="cylab"[^>]*>([^<]*)</span>', svg)
-    assert tags and all('Stage' not in t for t in tags)
-    assert any(f'{level:,.2f}' in t for t in tags)
+    assert not any(f'{m[0]:,.2f}' in t for m in marks for t in tags)   # no price on chart
+    legend = cpg.trigger_legend(r)
+    for m in marks:
+        assert f'{m[0]:,.2f}' in legend                # the prices are in the key instead
+    month = r['close'].tail(21)
     far = month.max() * 2
     svg = cpg.svg_cycle(month, r['points'], r['current'], r['phases'], [], (), (), None,
-                        ((month.index[0], far, cpg.UP, 'far'),))
-    assert f'&#8593; {far:,.2f}' in svg              # pinned to the top edge with an arrow
-    assert 'stroke-dasharray="2,3"' not in svg        # and no line squashing the price
+                        ((far, cpg.UP, 'far'),))
+    assert '&#8593;</span>' in svg                     # an arrow shows which way it lies
+    assert 'stroke-dasharray="7,4"' not in svg         # and no line squashing the price
+
+
+def test_a_crossed_trigger_says_so_instead_of_a_negative_distance(monkeypatch):
+    """Price already above the top of a base whose average is not rising yet: still Stage 1,
+    and the card says the level is crossed and waiting, not '-2% away'."""
+    import re
+    import cycle_page as cpg
+    s = run_table(LONG_BASE + [(106, 'neutral')], monkeypatch)
+    c = s['current']
+    up = by_to(c['triggers'])[('up', 2)]
+    assert c['stage'] == 1 and up['crossed']
+    r = {'stage': s, 'confidence': {'level': 'High', 'reasons': []}}
+    card = re.sub('<[^>]+>', '|', cpg.now_card(r))
+    assert 'already crossed, waiting for confirmation' in card
+    assert 'already crossed' in ' '.join(cy.sg.outlook(s)['up'])
+    down = by_to(c['triggers'])[('down', 4)]
+    assert not down['crossed'] and 'below the price' in cpg.trigger_where(down)
