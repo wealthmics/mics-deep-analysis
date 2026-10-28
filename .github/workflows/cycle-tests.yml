@@ -1,0 +1,19 @@
+name: cycle tests
+
+# Runs the stock cycle tests on every push and pull request, so a change that moves a
+# confirmed turning point, breaks the status reading or breaks an export is caught before
+# it reaches the app.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest tests -q
