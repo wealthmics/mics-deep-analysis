@@ -1031,11 +1031,15 @@ def run_cycle(ticker, isin, ccy):
             resolution = df_mod.resolve_listing(symbol, (tv_entry or {}).get('name'), ccy)
     if resolution and resolution.get('symbol') and not resolution.get('error'):
         symbol = resolution['symbol']
+    bench_symbol, bench_name = cy.benchmark_for(symbol)
     with st.spinner(f'Loading the price history for {symbol}...'):
         hist = load_history(symbol)
-        bench = load_benchmark()
+        bench = load_history(bench_symbol)
+        if bench is None and bench_symbol != cy.DEFAULT_BENCHMARK[0]:
+            bench_symbol, bench_name = cy.DEFAULT_BENCHMARK     # fall back, and say so
+            bench = load_benchmark()
     bench_close = bench['Close'] if bench is not None and 'Close' in bench else None
-    result = cy.analyse(hist, bench_close)
+    result = cy.analyse(hist, bench_close, bench_name=bench_name)
     name = (tv_entry or {}).get('name') or (resolution or {}).get('name') or symbol or ticker
     if result.get('error'):
         st.error(f'No cycle for {name}: {result["error"]}')

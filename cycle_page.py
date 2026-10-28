@@ -49,7 +49,10 @@ def card(title, body, sub=''):
 
 
 # ---------------------------------------------------------------- chart ------------------
-def svg_cycle(close, points, current, phases, zones, width=720, height=280):
+TREND_LINE = '#6f8fbf'
+
+
+def svg_cycle(close, points, current, phases, zones, sma=None, width=720, height=280):
     """Price on a log scale, so a 30% fall looks the same size at 10 as at 1,000.
 
     Bear phases are shaded, peaks and troughs marked, the nearest support and resistance
@@ -110,6 +113,14 @@ def svg_cycle(close, points, current, phases, zones, width=720, height=280):
         yt = y(current['trigger'])
         parts.append(f'<line x1="0" y1="{yt:.1f}" x2="{width}" y2="{yt:.1f}" stroke="{GOLD}" '
                      f'stroke-width="1.4" stroke-dasharray="6,4"/>')
+
+    if sma is not None:
+        avg = sma.reindex(s.index).dropna()
+        avg = avg[(avg > math.exp(lo)) & (avg < math.exp(hi))]
+        if len(avg) > 1:
+            ap = ' '.join(f'{x(t):.1f},{y(float(v)):.1f}' for t, v in avg.items())
+            parts.append(f'<polyline fill="none" stroke="{TREND_LINE}" stroke-width="1.4" '
+                         f'stroke-dasharray="2,3" points="{ap}"/>')
 
     pts = ' '.join(f'{x(t):.1f},{y(v):.1f}' for t, v in zip(s.index, levels))
     parts.append(f'<polyline fill="none" stroke="{NAVY}" stroke-width="1.8" points="{pts}"/>')
@@ -182,6 +193,8 @@ def svg_cycle(close, points, current, phases, zones, width=720, height=280):
 LEGEND = (f'<div class="clegend">'
           f'<span><i style="background:{NAVY};height:3px"></i>Close, log scale</span>'
           f'<span><i style="background:{BEAR_FILL};height:10px"></i>Bear phase</span>'
+          f'<span><i style="background:repeating-linear-gradient(90deg,{TREND_LINE} 0 2px,'
+          f'transparent 2px 5px)"></i>200-day average</span>'
           f'<span><b style="color:{DOWN}">&#9660;</b>Peak</span>'
           f'<span><b style="color:{UP}">&#9650;</b>Trough</span>'
           f'<span><i style="background:{SUPPORT_FILL};height:10px;border-top:2px solid {UP}">'
@@ -209,7 +222,8 @@ def chart_card(r):
         tabs.append(f'<label class="sbtn{on}"><input type="radio" name="cyspan" '
                     f'class="si-{lab}">{word}</label>')
         panels.append(f'<div class="spanpanel sp-{lab}{on}">'
-                      + svg_cycle(win, r['points'], cur, r['phases'], shown) + '</div>')
+                      + svg_cycle(win, r['points'], cur, r['phases'], shown,
+                                  (r['trend'] or {}).get('sma')) + '</div>')
     body = (LEGEND + f'<div class="spanset"><div class="tabs">{"".join(tabs)}</div>'
             f'{"".join(panels)}</div>'
             '<div class="smallnote">Hover over the chart for the date and close. Hover over a '
@@ -234,20 +248,33 @@ def reading(r):
         return (f'No cycle yet. Since {day(r["first_date"])} the price has not moved '
                 f'{pct(T, False)} from any high or low, which is the move this stock needs to '
                 f'start or end a phase.')
+    st = r['status']
     if cur['state'] == 'bull':
-        s = (f'<b>Bull phase</b> since the {day(cur["start"])} low of {px(cur["start_price"])}, '
+        s = (f'<b>{st["label"]}.</b> Bull phase since the {day(cur["start"])} low of {px(cur["start_price"])}, '
              f'confirmed on {day(cur["confirm_date"])}. The latest close of '
              f'{px(cur["last_price"])} is {pct(-cur["from_extreme"], False)} below the '
              f'{px(cur["extreme"])} high, and the phase ends on a close below '
              f'<b>{px(cur["trigger"])}</b>.')
         key, word = 'bull_months', 'bull'
     else:
-        s = (f'<b>Bear phase</b> since the {day(cur["start"])} high of {px(cur["start_price"])}, '
+        s = (f'<b>{st["label"]}.</b> Bear phase since the {day(cur["start"])} high of {px(cur["start_price"])}, '
              f'confirmed on {day(cur["confirm_date"])}. The latest close of '
              f'{px(cur["last_price"])} is {pct(cur["from_extreme"], False)} above the '
              f'{px(cur["extreme"])} low, and the phase ends on a close above '
              f'<b>{px(cur["trigger"])}</b>.')
         key, word = 'bear_months', 'bear'
+    if st['qualifier']:
+        if cur['state'] == 'bull':
+            s += (' The bull phase has not ended, but the price is moving against it: '
+                  + ', and '.join(st['reasons']) + '. Treat this as a bull phase under '
+                  'pressure, not a healthy one.')
+        else:
+            s += (' The bear phase has not ended, but the price is moving against it: '
+                  + ', and '.join(st['reasons']) + '. Treat this as a recovery attempt that '
+                  'has not yet been confirmed.')
+    if st['near']:
+        s += (f' The latest close is within {pct(abs(cur["to_trigger"]), False)} of that level, '
+              f'so the phase could change on any day.')
     basis, dropped = compare_basis(r, key)
     if basis['n']:
         share = cur['months'] / basis['median'] if basis['median'] else None
@@ -266,17 +293,48 @@ def reading(r):
                   f'description of the past rather than a pattern.')
     else:
         s += f' There is no completed {word} phase yet to compare it with.'
+    if r['confidence']['level'] == 'Low':
+        s += (' <b>Data warning:</b> the price history has problems that could make this '
+              'reading wrong. See "How much to trust this reading".')
     return s
 
 
 # ---------------------------------------------------------------- rail -------------------
+def trend_text(tr):
+    if not tr:
+        return 'n/a'
+    side = 'above' if tr['above'] else 'below'
+    word = {'up': 'Up', 'down': 'Down', 'mixed': 'Mixed'}[tr['direction']]
+    return f'{word}, {pct(abs(tr["gap"]), False)} {side} a {tr["slope_dir"]} average'
+
+
+def trust_card(r):
+    """How much weight the reading can bear, and every problem found in the data."""
+    conf = r['confidence']
+    rows = [kv('Confidence', conf['level'])]
+    if conf['reasons']:
+        rows.append('<div class="body-text">' + '</div><div class="body-text">'.join(
+            esc(x[0].upper() + x[1:]).rstrip('.') + '.' for x in conf['reasons']) + '</div>')
+    else:
+        rows.append('<div class="body-text">The data passed every check, there are enough past '
+                    'phases to compare with, the price is not close to the trigger and the '
+                    'trend agrees with the phase.</div>')
+    note = ('High means the data is clean and the reading is settled. Medium means the reading '
+            'is sound but thin or unsettled. Low means the data itself may be wrong; check the '
+            'price history before using any figure.')
+    return card('How much to trust this reading', ''.join(rows)
+                + f'<div class="cnote">{note}</div>')
+
+
 def now_card(r):
     cur = r['current']
     if not cur.get('state'):
         return card('Where the stock is now',
                     '<div class="body-text">No phase has been confirmed yet.</div>')
     bull = cur['state'] == 'bull'
-    rows = [kv('Phase', 'Bull' if bull else 'Bear', 'confirmed'),
+    st, tr = r['status'], r['trend']
+    rows = [kv('Status', st['label'], f'confidence {r["confidence"]["level"].lower()}'),
+            kv('Phase', 'Bull' if bull else 'Bear', 'confirmed'),
             kv('Started', px(cur['start_price']), f'{"low" if bull else "high"} on '
                f'{day(cur["start"])}'),
             kv('Confirmed', px(cur['confirm_price']), f'close on {day(cur["confirm_date"])}'),
@@ -285,6 +343,10 @@ def now_card(r):
             kv(f'{"Highest" if bull else "Lowest"} close since', px(cur['extreme']),
                day(cur['extreme_date'])),
             kv('Latest close', px(cur['last_price']), day(cur['last_date'])),
+            kv(f'{"From the high" if bull else "From the low"}', pct(cur['from_extreme']),
+               f'{abs(cur["from_extreme"]) / r["threshold"] * 100:.0f}% of the '
+               f'{pct(r["threshold"], False)} threshold'),
+            kv('Trend', trend_text(tr), '200-day average'),
             kv(f'Phase ends on a close {"below" if bull else "above"}', px(cur['trigger']),
                f'{"high" if bull else "low"} {"minus" if bull else "plus"} '
                f'{pct(r["threshold"], False)}'),
@@ -333,12 +395,15 @@ def rule_card(r):
     vol = r['vol']
     if vol is None:
         how = 'fixed for this run'
-    elif r['threshold'] > vol + 1e-9:
-        how = f'volatility of {pct(vol, False)}, raised to the 15% floor'
-    elif r['threshold'] < vol - 1e-9:
-        how = f'volatility of {pct(vol, False)}, capped at 35%'
     else:
-        how = 'its typical annual volatility'
+        yrs = r.get('threshold_years') or cy.THRESHOLD_YEARS
+        base = f'volatility of {pct(vol, False)} over the last {yrs} year{"s" if yrs != 1 else ""}'
+        if r['threshold'] >= cy.THRESHOLD_CAP - 1e-9 and vol * cy.THRESHOLD_MULT > cy.THRESHOLD_CAP:
+            how = f'{base}, capped at {cy.THRESHOLD_CAP * 100:.0f}%'
+        elif r['threshold'] <= cy.THRESHOLD_FLOOR + 1e-9 and vol * cy.THRESHOLD_MULT < cy.THRESHOLD_FLOOR:
+            how = f'{base}, raised to the {cy.THRESHOLD_FLOOR * 100:.0f}% floor'
+        else:
+            how = base
     done = len(r['phases'])
     return card('The rule for this stock',
                 kv('Threshold', pct(r['threshold'], False), how)
@@ -432,10 +497,12 @@ def history_card(r):
                     f'<td>{px(p["end_price"])}</td><td>{p["months"]:.1f}</td>'
                     f'<td class="val {cls}">{pct(p["change"])}</td><td>{tag(p)}</td></tr>')
     rows.append('</tbody></table>')
-    sub = ('Most recent first. A bear phase is marked market-wide when the S&amp;P 500 also '
-           f'fell at least {int(cy.MARKET_FALL * 100)}% inside it, and stock-specific when it '
-           'did not.' if r['bench_ok'] else 'Most recent first. The S&amp;P 500 did not load, '
-           'so bear phases are not tagged as market-wide or stock-specific.')
+    bn = esc(r.get('bench_name') or 'S&P 500')
+    sub = (f'Most recent first. A bear phase is marked market-wide when the {bn}, this '
+           f'listing\'s own market, also fell at least {int(cy.MARKET_FALL * 100)}% inside it, '
+           'and stock-specific when it did not.' if r['bench_ok'] else
+           f'Most recent first. The {bn} did not load, so bear phases are not tagged as '
+           'market-wide or stock-specific.')
     return card('Every completed phase', ''.join(rows), sub)
 
 
@@ -463,7 +530,20 @@ def holdings_card(r):
 # ---------------------------------------------------------------- definitions, limits ----
 DEFINITIONS = [
     ('Threshold', 'The size of move this stock needs to change phase.',
-     'Its median annual volatility across each year of history, kept between 15% and 35%.'),
+     'Its median annual volatility over each of the last five years, kept between 15% and '
+     '35%.'),
+    ('Status', 'The one-line reading at the top of the page.',
+     'The confirmed phase, marked "correcting" (bull) or "rebounding" (bear) when the price has '
+     'moved back at least half the threshold from the phase\'s extreme, or when the 200-day '
+     'trend points against the phase.'),
+    ('Trend', 'Which way the price is moving now, on a shorter view than the cycle.',
+     'Up when the close is above a 200-day average that is not falling; down when it is below '
+     'one that is not rising; mixed otherwise. The average\'s direction is its change over the '
+     'last 21 trading days, with less than 0.5% either way counted as flat.'),
+    ('Confidence', 'How much weight the reading can bear.',
+     'Low if any data check failed. Medium if there are fewer than five past phases of the '
+     'current kind, the price is within 5% of the trigger, the trend disagrees with the phase, '
+     'or no phase is confirmed. High otherwise.'),
     ('Peak', 'The high of a bull phase. Only known in hindsight.',
      'The highest close before a fall of at least the threshold.'),
     ('Trough', 'The low of a bear phase. Only known in hindsight.',
@@ -525,9 +605,16 @@ LIMITATIONS = [
     ('The threshold is a choice.',
      'A smaller threshold finds more and shorter cycles, a larger one fewer and longer ones. '
      'Setting it from the stock\'s own volatility puts every stock on its own scale, but a '
-     'different setting would date some turns differently.'),
+     'different setting would date some turns differently. For volatile stocks the 35% cap '
+     'means a long fall can stay inside a bull phase, which is why the status and the trend '
+     'are shown beside it.'),
+    ('The status describes today. It is not a signal.',
+     '"Correcting" and "rebounding" say that the price is currently moving against its phase. '
+     'Many corrections end without the phase changing, and many rebounds fade. Only a close '
+     'beyond the trigger changes the phase.'),
     ('The data has limits.',
-     'Daily closes from Yahoo, in the listing currency. Levels are traded prices adjusted for '
+     'Daily closes from Yahoo, in the listing currency, checked for gaps, frozen prices, '
+     'unrecorded splits and stale dates, with any problem shown under the confidence reading. Levels are traded prices adjusted for '
      'splits. Intraday highs and lows, trading costs, taxes and currency moves for an investor '
      'outside the listing market are not included. Nothing before Yahoo\'s history begins is '
      'covered.'),
@@ -579,8 +666,8 @@ def build(r, name, ticker, exchange, ccy, isin, company_query):
     bits = [b for b in [ticker, exchange, isin, ccy and f'Prices in {ccy}'] if b]
     meta = '<span class="sep">/</span>'.join(
         (f'<b>{esc(b)}</b>' if i == 0 else esc(b)) for i, b in enumerate(bits))
-    state = {'bull': ('Bull phase', 'up'), 'bear': ('Bear phase', 'down')}.get(
-        cur.get('state'), ('No phase yet', ''))
+    st = r['status']
+    state = (st['label'], st['tone'] if st['tone'] in ('up', 'down') else '')
     # the company page stretches its cards so both columns end level; here the rail is much
     # shorter than the tables, and stretching left large empty cards, so cards keep their size
     H = [CSS, CY_CSS, '<div class="an cy">',
@@ -596,7 +683,8 @@ def build(r, name, ticker, exchange, ccy, isin, company_query):
          f'<div class="px num">{px(cur["last_price"])}<span>{esc(ccy or "")}</span></div>'
          f'<div class="chg {state[1]}">{state[0]}</div></div></div>',
          f'<div class="read" style="margin-top:12px">{reading(r)}</div>',
-         '<div class="grid"><div>', chart_card(r), '</div><div>', now_card(r), '</div></div>',
+         '<div class="grid"><div>', chart_card(r), '</div><div>', now_card(r), trust_card(r),
+         '</div></div>',
          '<div class="grid"><div>', typical_card(r), '</div><div>', levels_card(r),
          rule_card(r), '</div></div>',
          '<div class="full">', history_card(r), holdings_card(r), '</div>',

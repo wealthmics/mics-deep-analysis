@@ -41,7 +41,8 @@ def now_rows(r):
                                       f'{cpg.day(r["first_date"])}'),
                 ('Latest close', _p(cur['last_price']), cpg.day(cur['last_date']))]
     bull = cur['state'] == 'bull'
-    rows = [('Phase', 'Bull' if bull else 'Bear', 'confirmed'),
+    rows = [('Status', r['status']['label'], f'confidence {r["confidence"]["level"].lower()}'),
+            ('Phase', 'Bull' if bull else 'Bear', 'confirmed'),
             ('Started', _p(cur['start_price']),
              f'{"low" if bull else "high"} on {cpg.day(cur["start"])}'),
             ('Confirmed', _p(cur['confirm_price']), f'close on {cpg.day(cur["confirm_date"])}'),
@@ -50,12 +51,18 @@ def now_rows(r):
             (f'{"Highest" if bull else "Lowest"} close since', _p(cur['extreme']),
              cpg.day(cur['extreme_date'])),
             ('Latest close', _p(cur['last_price']), cpg.day(cur['last_date'])),
+            ('From the high' if bull else 'From the low', _pc(cur['from_extreme']),
+             f'{abs(cur["from_extreme"]) / T * 100:.0f}% of the {_pc(T, False)} threshold'),
+            ('Trend', cpg.trend_text(r['trend']).replace('\u2212', '-'), '200-day average'),
             (f'Phase ends on a close {"below" if bull else "above"}', _p(cur['trigger']),
              f'{"high minus" if bull else "low plus"} {_pc(T, False)}'),
             ('Distance to that level', _pc(cur['to_trigger']), '')]
     if bull and cur.get('held_return') is not None:
         rows.append(('Held since confirmation', _pc(cur['held_return']),
                      f'{cur["held_months"]:.1f} months, dividends included'))
+    rows.append(('Confidence', r['confidence']['level'], ''))
+    for why in r['confidence']['reasons']:
+        rows.append(('  reason', '', why))
     return rows
 
 
@@ -72,7 +79,9 @@ def level_rows(r):
         out.append(('Latest close sits inside', cpg.zone_text(r['inside']), ''))
     years = (r['last_date'] - r['first_date']).days / 365.25
     out += [('Threshold', _pc(r['threshold'], False),
-             'median annual volatility, kept between 15% and 35%'),
+             f'median annual volatility over the last {r.get("threshold_years", cy.THRESHOLD_YEARS)} '
+             f'years, kept between 15% and 35%'),
+            ('Market used for market-wide falls', r.get('bench_name') or 'S&P 500', ''),
             ('History used', f'{years:.1f} years', f'from {cpg.day(r["first_date"])}'),
             ('Completed phases', str(len(r['phases'])),
              f'{r["extremes"]} extreme' if r['extremes'] else 'none extreme')]
@@ -226,7 +235,7 @@ def build_pptx(r, meta):
         if not chunk:
             break
         s = deck.content('Every completed phase' + (' (continued)' if k else ''),
-                         'Most recent first. Market-wide means the S&P 500 also fell at least '
+                         f'Most recent first. Market-wide means the {r.get("bench_name") or "S&P 500"} also fell at least '
                          f'{int(cy.MARKET_FALL * 100)}% inside the bear phase.')
         rows = [['Phase', 'From', 'To', 'Start price', 'End price', 'Months', 'Change', 'Notes']]
         styles = {}

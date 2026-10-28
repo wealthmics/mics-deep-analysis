@@ -10,8 +10,20 @@ arrive:
     A bear phase ends when the price closes at least the threshold above the lowest close
     since the last peak. That low is then a confirmed trough.
 
-The threshold is the stock's own typical annual volatility, kept between 15% and 35%, so a
-utility and a semiconductor are each measured on their own scale.
+The threshold is the stock's typical annual volatility over the last five years, kept between
+15% and 35%, so a utility and a semiconductor are each measured on their own scale, and a
+stock is measured as it trades now rather than as it traded just after listing.
+
+The cycle is deliberately slow, so the page never shows it on its own. Next to it sits a
+trend reading from the 200-day average, and the two are combined into one status: a bull
+phase that has given back half its threshold, or whose trend has turned down, reads as
+"correcting"; a bear phase that has recovered half its threshold, or whose trend has
+turned up, reads as "rebounding". The status changes what the page says about today. It
+never moves a confirmed turning point, so the history and every median are unaffected.
+
+Before any of this is trusted, the price series is checked for gaps, frozen prices, jumps
+that look like a missing split, stale data and short history, and the page states how
+much weight the reading can bear.
 
 Prices are traded prices: adjusted for splits but not for dividends. That keeps every level
 on the page equal to a price that actually printed, so a support zone means what a trader
@@ -33,8 +45,45 @@ ZONE_BAND = 0.04            # turning points within 4% of each other form one zo
 MIN_DAYS = 504              # two years of trading days before anything is shown
 MIN_CYCLES = 5              # below this many completed phases, averages are flagged as thin
 OUTLIER_Z = 3.5             # robust z score above which a phase counts as extreme
-MARKET_FALL = 0.20          # an S&P 500 fall this deep during a bear phase makes it market-wide
+MARKET_FALL = 0.20          # a benchmark fall this deep during a bear phase makes it market-wide
 DAYS_PER_MONTH = 30.4375
+
+THRESHOLD_YEARS = 5         # volatility measured over this many recent years
+THRESHOLD_MULT = 1.0        # threshold = multiple x volatility; calibrate.py tests other values
+
+TREND_DAYS = 200            # the trend is the 200-day average of traded closes
+TREND_SLOPE_DAYS = 21       # its direction is its change over the last month
+TREND_FLAT = 0.005          # a change smaller than this either way counts as flat
+CORRECTION_SHARE = 0.5      # half the threshold given back from the extreme
+NEAR_TRIGGER = 0.05         # within 5% of the trigger counts as close to turning
+
+JUMP = 0.40                 # a one-day move this large with no split recorded is suspect
+FLAT_RUN = 10               # this many identical closes in a row looks like a frozen price
+GAP_DAYS = 10               # calendar days between closes that counts as a hole in the data
+STALE_DAYS = 7              # a latest close older than this is stale
+SHORT_YEARS = 5             # less history than this is flagged as short
+
+# Each listing is compared with its own market. Yahoo suffix -> (index symbol, name).
+# Anything not listed, US listings included, uses the S&P 500.
+BENCHMARKS = {
+    '.NS': ('^NSEI', 'Nifty 50'), '.BO': ('^BSESN', 'BSE Sensex'),
+    '.L': ('^FTSE', 'FTSE 100'), '.DE': ('^GDAXI', 'DAX'), '.F': ('^GDAXI', 'DAX'),
+    '.PA': ('^FCHI', 'CAC 40'), '.AS': ('^AEX', 'AEX'), '.SW': ('^SSMI', 'SMI'),
+    '.T': ('^N225', 'Nikkei 225'), '.HK': ('^HSI', 'Hang Seng'),
+    '.TO': ('^GSPTSE', 'S&P/TSX Composite'), '.AX': ('^AXJO', 'S&P/ASX 200'),
+    '.KS': ('^KS11', 'KOSPI'), '.SI': ('^STI', 'Straits Times Index'),
+    '.SR': ('^TASI.SR', 'Tadawul All Share'),
+}
+DEFAULT_BENCHMARK = ('^GSPC', 'S&P 500')
+
+
+def benchmark_for(symbol):
+    """The index a listing is judged against for market-wide falls: (symbol, name)."""
+    sym = str(symbol or '').upper()
+    for suffix, bench in BENCHMARKS.items():
+        if sym.endswith(suffix.upper()):
+            return bench
+    return DEFAULT_BENCHMARK
 
 
 # ---------------------------------------------------------------- prices -----------------
@@ -72,23 +121,26 @@ def traded_prices(hist):
     return close / factor, divs
 
 
-def threshold_for(close):
-    """The stock's typical annual volatility, kept between the floor and the cap.
+def threshold_for(close, years=THRESHOLD_YEARS, mult=THRESHOLD_MULT):
+    """The stock's typical annual volatility over its recent years, times the multiple,
+    kept between the floor and the cap.
 
-    Measured year by year and the median taken, so one crash year cannot set the scale for
-    the whole history. Years are counted back from the latest close so the most recent one
-    is complete.
+    Measured year by year over the last few years and the median taken, so one crash year
+    cannot set the scale, and the volatile first years after a listing do not set it for a
+    stock that has since calmed down. Years are counted back from the latest close so the
+    most recent one is complete. Returns (threshold, volatility).
     """
     r = np.log(close).diff().dropna()
-    years = len(r) // 252
-    if years >= 1:
-        r = r.iloc[len(r) - years * 252:]
+    have = len(r) // 252
+    if have >= 1:
+        use = min(have, years) if years else have
+        r = r.iloc[len(r) - use * 252:]
         vols = [float(r.iloc[i * 252:(i + 1) * 252].std()) * math.sqrt(252)
-                for i in range(years)]
+                for i in range(use)]
         vol = float(np.median(vols))
     else:
         vol = float(r.std()) * math.sqrt(252)
-    return min(THRESHOLD_CAP, max(THRESHOLD_FLOOR, vol)), vol
+    return min(THRESHOLD_CAP, max(THRESHOLD_FLOOR, vol * mult)), vol
 
 
 # ---------------------------------------------------------------- the walk ---------------
@@ -225,6 +277,139 @@ def tag_market(phases, bench):
         p['market_fall'] = fall
 
 
+# ---------------------------------------------------------------- trend and status -------
+def trend_of(close):
+    """Where the latest close sits against its 200-day average, and which way that average
+    is moving. None until there are enough closes to measure it."""
+    if len(close) < TREND_DAYS + TREND_SLOPE_DAYS:
+        return None
+    sma = close.rolling(TREND_DAYS).mean()
+    now, before = float(sma.iloc[-1]), float(sma.iloc[-1 - TREND_SLOPE_DAYS])
+    last = float(close.iloc[-1])
+    slope = now / before - 1
+    slope_dir = 'rising' if slope > TREND_FLAT else 'falling' if slope < -TREND_FLAT else 'flat'
+    above = last >= now
+    if above and slope_dir != 'falling':
+        direction = 'up'
+    elif not above and slope_dir != 'rising':
+        direction = 'down'
+    else:
+        direction = 'mixed'
+    return {'sma': sma, 'level': now, 'gap': last / now - 1, 'slope': slope,
+            'slope_dir': slope_dir, 'above': above, 'direction': direction}
+
+
+def status_of(current, trend, threshold):
+    """The one-line status the page leads with, and the reasons for it.
+
+    The cycle says which big phase the stock is in. The qualifier says whether the price is
+    currently moving with that phase or against it, judged two ways: how much of the
+    threshold has been given back from the extreme, and which way the trend points."""
+    state = current.get('state')
+    if not state:
+        return {'label': 'No phase yet', 'tone': '', 'qualifier': None, 'near': False,
+                'reasons': []}
+    trend_dir = trend['direction'] if trend else None
+    move = abs(current['from_extreme'])
+    deep = move >= CORRECTION_SHARE * threshold
+    reasons = []
+    if state == 'bull':
+        against = trend_dir == 'down'
+        if deep:
+            reasons.append(f'it is {move * 100:.0f}% below the phase high, more than half the '
+                           f'{threshold * 100:.0f}% fall that would end the phase')
+        if against:
+            reasons.append('it is below a 200-day average that is no longer rising')
+        qualifier = 'correcting' if (deep or against) else None
+        tone = 'mixed' if qualifier else 'up'
+    else:
+        against = trend_dir == 'up'
+        if deep:
+            reasons.append(f'it is {move * 100:.0f}% above the phase low, more than half the '
+                           f'{threshold * 100:.0f}% rise that would end the phase')
+        if against:
+            reasons.append('it is above a 200-day average that is no longer falling')
+        qualifier = 'rebounding' if (deep or against) else None
+        tone = 'mixed' if qualifier else 'down'
+    near = abs(current['to_trigger']) <= NEAR_TRIGGER
+    label = f'{state.title()} phase' + (f', {qualifier}' if qualifier else '')
+    return {'label': label, 'tone': tone, 'qualifier': qualifier, 'near': near,
+            'reasons': reasons}
+
+
+# ---------------------------------------------------------------- data checks ------------
+def data_checks(close, today=None):
+    """Problems in the price series that would make the reading wrong rather than merely
+    uncertain. Each is {'level': 'warn' or 'note', 'text': ...}."""
+    out = []
+    today = pd.Timestamp(today or pd.Timestamp.today()).normalize()
+    ratio = (close / close.shift(1)).dropna()
+    jumps = ratio[(ratio > 1 + JUMP) | (ratio < 1 / (1 + JUMP))]
+    if len(jumps):
+        last = jumps.index[-1]
+        out.append({'level': 'warn',
+                    'text': f'{len(jumps)} one-day move{"s" if len(jumps) != 1 else ""} of more '
+                            f'than {JUMP * 100:.0f}%, the latest on {last:%d %b %Y}. If that '
+                            f'was a split or a consolidation Yahoo has not recorded, the cycle '
+                            f'around it is wrong.'})
+    same = (close.diff() == 0).astype(int)
+    run = int(same.groupby((same == 0).cumsum()).cumsum().max() or 0) + 1
+    if run >= FLAT_RUN:
+        out.append({'level': 'warn',
+                    'text': f'The close stayed exactly the same for {run} trading days in a '
+                            f'row at one point, which usually means the stock did not trade '
+                            f'or the price feed froze.'})
+    gaps = pd.Series(close.index).diff().dt.days
+    holes = int((gaps > GAP_DAYS).sum())
+    if holes:
+        out.append({'level': 'warn' if holes > 2 else 'note',
+                    'text': f'{holes} gap{"s" if holes != 1 else ""} of more than {GAP_DAYS} '
+                            f'days with no close, such as a suspension or missing data.'})
+    age = (today - close.index[-1]).days
+    if age > STALE_DAYS:
+        out.append({'level': 'warn',
+                    'text': f'The latest close is from {close.index[-1]:%d %b %Y}, {age} days '
+                            f'ago. The reading describes that date, not today.'})
+    years = (close.index[-1] - close.index[0]).days / 365.25
+    if years < SHORT_YEARS:
+        out.append({'level': 'note',
+                    'text': f'Only {years:.1f} years of history, so few full cycles can have '
+                            f'happened yet.'})
+    return out
+
+
+def confidence_of(r):
+    """How much weight the reading can bear: High, Medium or Low, with the reasons.
+
+    Low when the data itself is suspect. Medium when the reading is sound but thin or
+    unsettled: few past phases to compare with, the price close to the trigger, or the
+    trend pointing against the phase."""
+    cur, st = r['current'], r['status']
+    low, medium = [], []
+    for c in r['checks']:
+        if c['level'] == 'warn':
+            low.append(c['text'])
+    if cur.get('state'):
+        key = 'bull_months' if cur['state'] == 'bull' else 'bear_months'
+        n = r['all'][key]['n']
+        if n == 0:
+            medium.append(f'no completed {cur["state"]} phase yet to compare the current one with')
+        elif n < MIN_CYCLES:
+            medium.append(f'only {n} completed {cur["state"]} phase{"s" if n != 1 else ""} to '
+                          f'compare the current one with')
+        if st['near']:
+            medium.append(f'the price is within {NEAR_TRIGGER * 100:.0f}% of the level that '
+                          f'ends the phase, so it could change on any day')
+        if st['qualifier']:
+            medium.append('the price is moving against the phase: ' + ', and '.join(st['reasons']))
+    else:
+        medium.append('no phase has been confirmed yet')
+    if r['trend'] is None:
+        medium.append('not enough history for a 200-day trend')
+    level = 'Low' if low else 'Medium' if medium else 'High'
+    return {'level': level, 'reasons': low + medium}
+
+
 # ---------------------------------------------------------------- statistics -------------
 def describe(values):
     x = [v for v in values if v is not None and not math.isnan(v)]
@@ -298,12 +483,17 @@ def nearest_zones(zones, price):
 
 
 # ---------------------------------------------------------------- everything -------------
-def analyse(hist, bench=None, threshold=None):
+def analyse(hist, bench=None, threshold=None, bench_name=None, today=None,
+            threshold_mult=THRESHOLD_MULT):
     """The whole cycle reading for one stock. Every figure on the page comes from here.
 
     hist       Yahoo daily history with Close and, if available, Dividends
-    bench      S&P 500 closes, for tagging market-wide bear phases; optional
+    bench      closes of the listing's own market index (benchmark_for), for tagging
+               market-wide bear phases; optional
     threshold  fixed threshold for tests; normally worked out from the stock itself
+    bench_name the index's name, for the page
+    today      the date the data checks measure staleness against; defaults to today
+    threshold_mult  multiple of volatility used for the threshold; calibrate.py varies it
     """
     if hist is None or 'Close' not in hist:
         return {'error': 'No price history arrived from Yahoo.'}
@@ -315,7 +505,7 @@ def analyse(hist, bench=None, threshold=None):
 
     vol = None
     if threshold is None:
-        threshold, vol = threshold_for(close)
+        threshold, vol = threshold_for(close, mult=threshold_mult)
     points, current = turning_points(close, threshold)
     phases = phases_from(points)
     holdings = holdings_from(points, divs)
@@ -345,10 +535,17 @@ def analyse(hist, bench=None, threshold=None):
 
     zones = zones_from(points, phases, current)
     support, resistance, inside = nearest_zones(zones, current['last_price'])
-    return {'close': close, 'dividends': divs, 'threshold': threshold, 'vol': vol,
-            'points': points, 'phases': phases, 'holdings': holdings, 'current': current,
-            'all': typical(phases, holdings, False), 'clean': typical(phases, holdings, True),
-            'extremes': sum(1 for p in phases if p['extreme']),
-            'zones': zones, 'support': support, 'resistance': resistance, 'inside': inside,
-            'has_dividends': not divs.empty, 'bench_ok': bench is not None,
-            'first_date': close.index[0], 'last_date': close.index[-1]}
+    trend = trend_of(close)
+    r = {'close': close, 'dividends': divs, 'threshold': threshold, 'vol': vol,
+         'points': points, 'phases': phases, 'holdings': holdings, 'current': current,
+         'all': typical(phases, holdings, False), 'clean': typical(phases, holdings, True),
+         'extremes': sum(1 for p in phases if p['extreme']),
+         'zones': zones, 'support': support, 'resistance': resistance, 'inside': inside,
+         'has_dividends': not divs.empty, 'bench_ok': bench is not None,
+         'bench_name': bench_name or DEFAULT_BENCHMARK[1],
+         'threshold_years': min(THRESHOLD_YEARS, max(1, (len(close) - 1) // 252)),
+         'first_date': close.index[0], 'last_date': close.index[-1],
+         'trend': trend, 'status': status_of(current, trend, threshold),
+         'checks': data_checks(close, today)}
+    r['confidence'] = confidence_of(r)
+    return r
