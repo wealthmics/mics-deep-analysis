@@ -365,56 +365,85 @@ def analyse(close, today=None):
 
 # ---------------------------------------------------------------- the two triggers -------
 def triggers(cur, price):
-    """The nearest level in each direction that would change the stage, as
-    {'up': trigger or None, 'down': trigger or None}. Each trigger is
-    {'level', 'to', 'kind', 'moves', 'distance', 'rule'}:
+    """Every level that would move the stage, given the stage it is in now, as a list
+    ordered upside first, nearest first. Each trigger is a dict:
 
+        side      'up' or 'down', the way the price has to move
+        level     the price
         to        the stage it leads to
+        alt       a second stage the same level can lead to, decided by the direction of
+                  the 30-week average, or None
+        needs     a condition besides the price, or None
         kind      'range' (edge of a base or top), 'average' (the 30-week average) or
                   'fail' (back through the level of a breakout still being tested)
         moves     True when the level shifts week to week (the average)
         distance  level / latest price - 1
+        crossed   True when the latest price is already beyond the level and the stage is
+                  only waiting for the weekly confirmation (or the average's direction)
+        name      what the line means, in words
         rule      what has to happen, in words
 
-    Every stage change waits for CONFIRM_WEEKS finished weeks in a row. A side with no
-    trigger is a side where the stage would only continue (new highs in Stage 2, new lows
-    in Stage 4). This is the one place the levels are worked out; the page, the chart and
-    the exports all read them from here."""
-    st, t = cur['stage'], cur.get('testing')
-    n = CONFIRM_WEEKS
-    up = down = None
+    The list follows the stage rules exactly:
+
+        Stage 1 or 3   top of the range -> Stage 2, bottom of the range -> Stage 4
+        Stage 2        while its breakout is tested: back through the breakout level ->
+                       the stage it came from, and under the 30-week average while the
+                       average falls -> Stage 4. Once proven: under the 30-week average ->
+                       Stage 3, or Stage 4 if the average is falling.
+        Stage 4        the mirror image of Stage 2.
+
+    A proven advance has no way back to a base: a fall from there is a top. Every change
+    waits for CONFIRM_WEEKS finished weeks in a row. This is the one place the levels are
+    worked out; the page, the chart and the exports all read them from here."""
+    st, t, n = cur['stage'], cur.get('testing'), CONFIRM_WEEKS
+    out = []
+
+    def add(side, level, to, kind, rule, alt=None, needs=None):
+        name = f'Stage {to}, {NAMES[to]}'
+        if alt:
+            name += f', or Stage {alt} if the average {"falls" if side == "down" else "rises"}'
+        if needs:
+            name += f', if {needs}'
+        level = float(level)
+        crossed = price >= level if side == 'up' else price <= level
+        out.append({'side': side, 'level': level, 'to': to, 'alt': alt, 'needs': needs,
+                    'kind': kind, 'moves': kind == 'average', 'name': name, 'rule': rule,
+                    'distance': level / price - 1, 'crossed': crossed})
+
     if st in (1, 3):
-        up = {'level': cur['range_high'], 'to': 2, 'kind': 'range', 'moves': False,
-              'rule': f'{n} weekly closes above a rising 30-week average, the latest above the '
-                      f'top of the {"base" if st == 1 else "range"}'}
-        down = {'level': cur['range_low'], 'to': 4, 'kind': 'range', 'moves': False,
-                'rule': f'{n} weekly closes below a falling 30-week average, the latest under '
-                        f'the bottom of the {"base" if st == 1 else "range"}'}
+        box = 'base' if st == 1 else 'range'
+        add('up', cur['range_high'], 2, 'range',
+            f'{n} weekly closes above a rising 30-week average, the latest above the top of '
+            f'the {box}')
+        add('down', cur['range_low'], 4, 'range',
+            f'{n} weekly closes below a falling 30-week average, the latest under the bottom '
+            f'of the {box}')
     elif st == 2:
         if t:
-            down = {'level': t['fail'], 'to': t['from'], 'kind': 'fail', 'moves': False,
-                    'rule': f'{n} weekly closes below this level, the breakout level of '
-                            f'{_p(t["pivot"])} less a small buffer: the breakout would have '
-                            f'failed'}
+            add('down', t['fail'], t['from'], 'fail',
+                f'{n} weekly closes below the breakout level of {_p(t["pivot"])} less a small '
+                f'buffer: the breakout would have failed')
+            add('down', cur['ma'], 4, 'average',
+                f'{n} weekly closes under the 30-week average while it is falling',
+                needs='the average is falling')
         else:
-            down = {'level': cur['ma'], 'to': 3, 'kind': 'average', 'moves': True,
-                    'rule': f'{n} weekly closes under the 30-week average, or the average '
-                            f'flattening'}
+            add('down', cur['ma'], 3, 'average',
+                f'{n} weekly closes under the 30-week average, or the average flattening; '
+                f'Stage 4 instead if the average is falling', alt=4)
     elif st == 4:
         if t:
-            up = {'level': t['fail'], 'to': t['from'], 'kind': 'fail', 'moves': False,
-                  'rule': f'{n} weekly closes above this level, the breakdown level of '
-                          f'{_p(t["pivot"])} plus a small buffer: the breakdown would have '
-                          f'failed'}
+            add('up', t['fail'], t['from'], 'fail',
+                f'{n} weekly closes above the breakdown level of {_p(t["pivot"])} plus a small '
+                f'buffer: the breakdown would have failed')
+            add('up', cur['ma'], 2, 'average',
+                f'{n} weekly closes over the 30-week average while it is rising',
+                needs='the average is rising')
         else:
-            up = {'level': cur['ma'], 'to': 1, 'kind': 'average', 'moves': True,
-                  'rule': f'{n} weekly closes over the 30-week average, or the average '
-                          f'flattening'}
-    for g in (up, down):
-        if g:
-            g['distance'] = g['level'] / price - 1
-            g['name'] = f'Stage {g["to"]}, {NAMES[g["to"]]}'
-    return {'up': up, 'down': down}
+            add('up', cur['ma'], 1, 'average',
+                f'{n} weekly closes over the 30-week average, or the average flattening; '
+                f'Stage 2 instead if the average is rising', alt=2)
+    out.sort(key=lambda g: (g['side'] != 'up', abs(g['distance'])))
+    return out
 
 
 # ---------------------------------------------------------------- the outlook ------------
@@ -513,17 +542,18 @@ def outlook(s, support=None, resistance=None):
                          f'week{"s" if b["fail_weeks"]["median"] != 1 else ""}')
             out['next'].append(line + '.')
 
-    # the two triggers, then what supports or warns before them
-    trig = cur['triggers']
-    for side, key in (('up', 'up'), ('down', 'down')):
-        g = trig[side]
-        if g:
+    # every trigger, then what supports or warns before them
+    for g in cur['triggers']:
+        if g['crossed']:
+            line = (f'{g["name"]}: {g["rule"]}. Level {_p(g["level"])}, which the price has '
+                    f'already crossed; the stage changes only once the rest of the rule is met')
+        else:
             line = (f'{g["name"]}: {g["rule"]}. Level {_p(g["level"])}, '
-                    f'{_pc(abs(g["distance"]), False)} {"above" if side == "up" else "below"} '
-                    f'the price')
-            if g['moves']:
-                line += ', moving with the average each week'
-            out[key].append(line + '.')
+                    f'{_pc(abs(g["distance"]), False)} '
+                    f'{"above" if g["side"] == "up" else "below"} the price')
+        if g['moves']:
+            line += ', moving with the average each week'
+        out[g['side']].append(line + '.')
     if t:
         word = 'breakout' if t['dir'] == 'up' else 'breakdown'
         (out['down'] if t['dir'] == 'up' else out['up']).append(

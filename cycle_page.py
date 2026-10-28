@@ -18,6 +18,7 @@ from page import CSS, DOWN, NAVY, UP, GOLD, HOVER_BAND_UNITS, esc, f, minus
 SUPPORT_FILL, RESIST_FILL, BEAR_FILL = '#bfe3cc', '#f4c4bf', '#eef2f8'
 EMA_LINE = '#c47a1f'
 STAGE_FILL = {1: '#cfdcee', 2: '#9fd4b2', 3: '#f1d39a', 4: '#efaaa3'}
+STAGE_LINE = {1: '#3f6aa8', 2: UP, 3: '#b7791f', 4: DOWN}     # trigger lines, by destination
 STRIP = 9
 
 
@@ -81,10 +82,10 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
     def near(v):
         return pmin / ZOOM <= v <= pmax * ZOOM
     zones = [zz for zz in zones if near(zz[0]['low']) or near(zz[0]['high'])]
-    pinned = [m for m in marks if not near(m[1])]
-    marks = [m for m in marks if near(m[1])]
+    pinned = [m for m in marks if not near(m[0])]
+    marks = [m for m in marks if near(m[0])]
     extra = [z['low'] for z, _, _ in zones] + [z['high'] for z, _, _ in zones]
-    extra += [m[1] for m in marks]
+    extra += [m[0] for m in marks]
     lo = math.log(min(levels + extra))
     hi = math.log(max(levels + extra))
     rng = (hi - lo) or 1
@@ -127,12 +128,11 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
             parts.append(f'<polyline fill="none" stroke="{colour}" stroke-width="1.4" '
                          + (f'stroke-dasharray="{dash}" ' if dash else '') + f'points="{ap}"/>')
 
-    # the two stage triggers, from the start of the current stage on
-    for start, level, colour, label in marks:
-        xa = x(max(pd.Timestamp(start), t0))
-        parts.append(f'<line x1="{xa:.1f}" x2="{width:.1f}" y1="{y(level):.1f}" '
-                     f'y2="{y(level):.1f}" stroke="{colour}" stroke-width="1.8" '
-                     f'stroke-dasharray="2,3"><title>{esc(label)}</title></line>')
+    # every stage trigger, as a line across the whole chart
+    for level, colour, label in marks:
+        parts.append(f'<line x1="0" x2="{width}" y1="{y(level):.1f}" y2="{y(level):.1f}" '
+                     f'stroke="{colour}" stroke-width="2" stroke-dasharray="7,4">'
+                     f'<title>{esc(label)}</title></line>')
 
     # the stage of every week, as a strip along the bottom
     for e in stage_eps:
@@ -209,15 +209,11 @@ def svg_cycle(close, points, current, phases, zones, lines=(), stage_eps=(), sta
         word = 'Support' if edge == UP else 'Resistance'
         tags += (f'<span class="cylab" style="top:{top_pct:.2f}%;color:{edge};'
                  f'border-color:{edge}">{word} {px(level)}</span>')
-    for _, level, colour, label in marks:
-        top_pct = max(0.0, min(100.0, y(level) / height * 100))
-        tags += (f'<span class="cylab" title="{esc(label)}" style="top:{top_pct:.2f}%;'
-                 f'color:{colour};border-color:{colour};left:auto;right:58px">{px(level)}</span>')
-    for _, level, colour, label in pinned:
+    for level, colour, label in pinned:
         above = level > pmax
         tags += (f'<span class="cylab" title="{esc(label)}, outside this range" '
                  f'style="top:{2 if above else 96}%;color:{colour};border-color:{colour};'
-                 f'left:auto;right:58px">{"&#8593;" if above else "&#8595;"} {px(level)}</span>')
+                 f'left:auto;right:58px">{"&#8593;" if above else "&#8595;"}</span>')
     return (f'<div class="plot"><div class="yaxis">{yaxis}</div>{"".join(parts)}{tags}</div>'
             f'<div class="xaxis">{"".join(dates)}</div>')
 
@@ -245,43 +241,38 @@ def chart_lines(r):
 
 
 def stage_triggers(r):
+    """Every level that would change the stage, from stages.triggers, or [] without one."""
     sgr = r.get('stage') or {}
     if not sgr or sgr.get('error'):
-        return {'up': None, 'down': None}
+        return []
     return sgr['current']['triggers']
 
 
-def trigger_label(g, side):
-    arrow = '&#9650;' if side == 'up' else '&#9660;'
-    return f'{arrow} {g["name"]}: {px(g["level"])}'
+def arrow(g):
+    return '&#9650;' if g['side'] == 'up' else '&#9660;'
+
+
+def trigger_where(g):
+    """Where the price stands against a trigger, in words for the card."""
+    if g['crossed']:
+        return 'already crossed, waiting for confirmation'
+    return f'{pct(abs(g["distance"]), False)} {"above" if g["side"] == "up" else "below"} the price'
 
 
 def trigger_marks(r):
-    sgr = r.get('stage') or {}
-    if not sgr or sgr.get('error'):
-        return ()
-    start = sgr['current']['start']
-    out = []
-    for side, colour in (('up', UP), ('down', DOWN)):
-        g = sgr['current']['triggers'][side]
-        if g:
-            plain_label = (f'{"Up" if side == "up" else "Down"} to {g["name"]}: '
-                           f'{"above" if side == "up" else "below"} {px(g["level"])}')
-            out.append((start, g['level'], colour, plain_label))
-    return tuple(out)
+    """(level, colour, tooltip) for each trigger line, coloured by the stage it leads to."""
+    return tuple((g['level'], STAGE_LINE[g['to']],
+                  f'{"Above" if g["side"] == "up" else "Below"} {px(g["level"])}: {g["name"]}')
+                 for g in stage_triggers(r))
 
 
 def trigger_legend(r):
     trig = stage_triggers(r)
-    spans = []
-    for side, colour in (('up', UP), ('down', DOWN)):
-        g = trig[side]
-        if g:
-            spans.append(f'<span><i style="background:repeating-linear-gradient(90deg,{colour} 0 '
-                         f'2px,transparent 2px 5px);height:2px"></i>{trigger_label(g, side)}'
-                         f'{", moves weekly" if g["moves"] else ""}</span>')
-    if not spans:
+    if not trig:
         return ''
+    spans = [f'<span><i style="background:repeating-linear-gradient(90deg,{STAGE_LINE[g["to"]]} '
+             f'0 7px,transparent 7px 11px);height:2px"></i>{arrow(g)} {esc(g["name"])}: '
+             f'{px(g["level"])}{", moves weekly" if g["moves"] else ""}</span>' for g in trig]
     return ('<div class="clegend"><span><b>Stage triggers</b>, 2 weekly closes beyond</span>'
             + ''.join(spans) + '</div>')
 
@@ -329,10 +320,11 @@ def chart_card(r):
             f'{"".join(panels)}</div>'
             '<div class="smallnote">Hover over the chart for the date, close and stage, over a '
             'marker for a past turning point, and over the strip along the bottom for each '
-            'stage\'s dates. The dotted lines are the two levels that would change the stage; '
-            'when one is far outside the range in view, its price is pinned to the top or bottom '
-            'edge with an arrow.</div>')
-    return card('Price, stages and the two triggers', body,
+            'stage\'s dates. Each dashed line is a level that would change the stage, in the '
+            'colour of the stage it leads to, with its price in the key above the chart. When '
+            'one is far outside the range in view, an arrow at the top or bottom edge shows '
+            'which way it lies.</div>')
+    return card('Price, stages and stage triggers', body,
                 f'{day(r["first_date"])} to {day(r["last_date"])}. Traded prices, adjusted '
                 f'for splits, not for dividends.')
 
@@ -419,15 +411,13 @@ def now_card(r):
             rows.append(kv('50-day EMA vs 200-day', 'above' if sh['ema_over_sma'] else 'below',
                            cross))
         for side in ('up', 'down'):
-            g = c['triggers'][side]
-            arrow = '&#9650;' if side == 'up' else '&#9660;'
-            if g:
-                rows.append(kv(f'{arrow} Turns to {g["name"]}', px(g['level']),
-                               f'{pct(g["distance"])} away'
-                               + (', moves weekly' if g['moves'] else '')))
-            else:
-                rows.append(kv(f'{arrow} {"Upside" if side == "up" else "Downside"}', 'no change',
-                               'the stage would only continue'))
+            here = [g for g in c['triggers'] if g['side'] == side]
+            for g in here:
+                rows.append(kv(f'{arrow(g)} {esc(g["name"])}', px(g['level']),
+                               trigger_where(g) + (', moves weekly' if g['moves'] else '')))
+            if not here:
+                rows.append(kv(f'{"&#9650; Upside" if side == "up" else "&#9660; Downside"}',
+                               'no change', 'a move this way only continues the stage'))
         t = c.get('testing')
         if t:
             word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
@@ -646,7 +636,7 @@ def tag(p):
     if p.get('extreme'):
         bits.append('<span class="pill a">extreme</span>')
     if p.get('market') == 'market-wide':
-        bits.append(f'<span class="pill n">market-wide</span>')
+        bits.append('<span class="pill n">market-wide</span>')
     elif p.get('market') == 'stock-specific':
         bits.append('<span class="pill n">stock-specific</span>')
     return ''.join(bits)
@@ -705,12 +695,14 @@ DEFINITIONS = [
      'both read up); from 1 or 3, two up weeks give 2 and two down weeks give 4, but only once '
      'the close also breaks out of that base or top: above its highest weekly close, or below '
      'its lowest, counting the 13 weeks before it began.'),
-    ('Stage triggers', 'The two levels that would change the stage, one up and one down.',
-     'The nearest stage-changing level on each side of the price, with the stage it leads to. '
-     'In a base or top: its top and bottom. In Stage 2 or 4: the 30-week average (which moves '
-     'weekly), or, while a breakout is being tested, the level that would fail it. Each needs '
-     'two weekly closes in a row beyond it. Stage 2 has no upside trigger and Stage 4 no '
-     'downside one, because those moves only continue the stage.'),
+    ('Stage triggers', 'Every level that would change the stage, with the stage it leads to.',
+     'Stage 1 or 3: the top of the range leads to Stage 2, the bottom to Stage 4. Stage 2 '
+     'while its breakout is tested: back through the breakout level returns it to the stage '
+     'it came from, and under a falling 30-week average leads to Stage 4. Stage 2 once proven: '
+     'under the 30-week average leads to Stage 3, or Stage 4 if the average is falling. Stage 4 '
+     'is the mirror image. Each needs two weekly closes in a row beyond the level; levels on '
+     'the 30-week average move weekly. Stage 2 has no upside trigger and Stage 4 no downside '
+     'one, because those moves only continue the stage.'),
     ('Breakout and its test', 'A move out of a base or top, checked before it is trusted.',
      'When Stage 1 or 3 turns into Stage 2 or 4, the edge of the range it left is the '
      'breakout level. The move is proven by a weekly close one range-height beyond that level, '

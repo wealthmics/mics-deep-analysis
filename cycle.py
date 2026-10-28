@@ -418,8 +418,8 @@ def confidence_of(r):
             word = 'breakout' if t['dir'] == 'up' else 'breakdown'
             medium.append(f'the {word} of the week of {t["week"]:%d %b %Y} is still being '
                           f'tested and could fail back to Stage {t["from"]}')
-        for g in sc['triggers'].values():
-            if g and abs(g['distance']) <= NEAR_TRIGGER:
+        for g in sc['triggers']:
+            if abs(g['distance']) <= NEAR_TRIGGER:
                 medium.append(f'the price is within {NEAR_TRIGGER * 100:.0f}% of the level that '
                               f'would turn it to {g["name"]}')
         run = sc.get('running')

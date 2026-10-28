@@ -66,23 +66,35 @@ def confidence_rows(r):
     return rows
 
 
+def triggers_of(r):
+    sgr = r.get('stage') or {}
+    return [] if not sgr or sgr.get('error') else sgr['current']['triggers']
+
+
+def trigger_colour(g):
+    """The export colour (hex, no #) of a trigger line: the colour of the stage it leads to."""
+    return cpg.STAGE_LINE[g['to']].lstrip('#').upper()
+
+
 def trigger_rows(r):
-    """The two levels that would change the stage, as (measure, value, detail)."""
+    """Every level that would change the stage, as (measure, value, detail)."""
     sgr = r.get('stage') or {}
     if not sgr or sgr.get('error'):
         return []
     c = sgr['current']
     rows = []
     for side in ('up', 'down'):
-        g = c['triggers'][side]
-        arrow = 'Up' if side == 'up' else 'Down'
-        if g:
-            rows.append((f'{arrow}: turns to {g["name"]}', _p(g['level']),
-                         f'{_pc(g["distance"])} away. {g["rule"][0].upper()}{g["rule"][1:]}'
+        here = [g for g in c['triggers'] if g['side'] == side]
+        for g in here:
+            rows.append((f'{"Up" if side == "up" else "Down"}: {g["name"]}', _p(g['level']),
+                         ('already crossed, waiting for confirmation. ' if g['crossed'] else
+                          f'{_pc(abs(g["distance"]), False)} '
+                          f'{"above" if side == "up" else "below"} the price. ')
+                         + f'{g["rule"][0].upper()}{g["rule"][1:]}'
                          + ('. Moves weekly with the average' if g['moves'] else '') + '.'))
-        else:
-            rows.append((f'{arrow}: no stage change', '',
-                         'a move this way would only continue the current stage'))
+        if not here:
+            rows.append((f'{"Up" if side == "up" else "Down"}: no stage change', '',
+                         'a move this way only continues the current stage'))
     t = c.get('testing')
     if t:
         word = 'Breakout' if t['dir'] == 'up' else 'Breakdown'
@@ -230,18 +242,12 @@ def build_pptx(r, meta):
     name = meta.get('name') or meta.get('symbol') or 'Company'
     last = cpg.day(r['last_date'])
     deck = Deck(f'MICS International   |   {name}   |   Stock cycle, prices to {last}')
-    cur = r['current']
     hl = cpg.headline(r)
     state_line = hl or 'No stage yet'
-    sgr = r.get('stage') or {}
-    if hl and not sgr.get('error'):
-        bits = []
-        for side, word in (('up', 'above'), ('down', 'below')):
-            g = sgr['current']['triggers'][side]
-            if g:
-                bits.append(f'{g["name"]} {word} {_p(g["level"])}')
-        if bits:
-            state_line += '.   Turns to ' + ', or '.join(bits)
+    bits = [f'{"above" if g["side"] == "up" else "below"} {_p(g["level"])}: Stage {g["to"]}'
+            for g in triggers_of(r)]
+    if bits:
+        state_line += '.   Triggers ' + ';  '.join(bits)
     deck.cover(name, ['Stock cycle', state_line,
                       f'{_meta_line(meta)}   |   Prices to {last}   |   '
                       f'Prepared by MICS International'])
@@ -252,7 +258,7 @@ def build_pptx(r, meta):
     rows = [['Stage and short-term trend', 'Value', '']] + [list(x) for x in stage_rows(r)]
     deck.table(s, X0, 1.85, [2.6, 1.35, 2.05], rows, size=10.5, rowh=0.38,
                aligns=['l', 'r', 'l'])
-    rows = [['The two stage triggers', 'Level', '']] + [list(x) for x in trigger_rows(r)]
+    rows = [['Stage triggers', 'Level', '']] + [list(x) for x in trigger_rows(r)]
     deck.table(s, 6.9, 1.85, [1.9, 1.0, 2.933], rows, size=10, rowh=0.62,
                aligns=['l', 'r', 'l'])
 
@@ -308,12 +314,9 @@ def build_pptx(r, meta):
     if len(m) > 12:
         series = [('Close', list(m.values), NAVY, 2, False)]
         sgr = r.get('stage') or {}
-        if sgr and not sgr.get('error'):
-            for side, colour in (('up', UP), ('down', DOWN)):
-                g = sgr['current']['triggers'][side]
-                if g:
-                    series.append((f'{"Up" if side == "up" else "Down"} trigger: {g["name"]}',
-                                   [g['level']] * len(m), colour, 1.5, True))
+        for g in triggers_of(r):
+            series.append((f'Stage {g["to"]} trigger', [g['level']] * len(m), trigger_colour(g),
+                           1.75, True))
         if sgr and not sgr.get('error'):
             ma = sgr['ma_daily'].reindex(m.index, method='ffill')
             if ma.notna().sum() > 12:
@@ -442,7 +445,7 @@ def build_xlsx(r, meta):
     rr = book.heading(ws, rr, 'Stage and short-term trend')
     rr = book.table(ws, rr, ['Measure', 'Value', 'Detail'], stage_rows(r),
                     aligns=['left', 'right', 'left'])
-    rr = book.heading(ws, rr, 'The two stage triggers (2 weekly closes beyond the level)')
+    rr = book.heading(ws, rr, 'Stage triggers (2 weekly closes beyond the level)')
     rr = book.table(ws, rr, ['Measure', 'Level', 'Detail'], trigger_rows(r),
                     aligns=['left', 'right', 'left'], wrap_cols=(2,))
     rr = book.heading(ws, rr, 'What usually comes next, and what to watch')
@@ -518,34 +521,31 @@ def build_xlsx(r, meta):
 
     # ---- Monthly prices with the levels, feeding a native chart
     m = monthly(r)
-    cur = r['current']
-    ws = book.sheet('Price chart', widths=(13, 12, 12, 12, 12))
+    trig = triggers_of(r)
+    ws = book.sheet('Price chart', widths=(13, 12) + (16,) * len(trig) + (12, 12))
     rr = book.title(ws, 'Month end closes and today\'s levels',
                     'Traded prices adjusted for splits, not dividends. The levels are today\'s, '
                     'repeated down the column so they draw as lines.')
-    sgr = r.get('stage') or {}
-    trig = ({'up': None, 'down': None} if not sgr or sgr.get('error') else
-            sgr['current']['triggers'])
-    up_l = trig['up']['level'] if trig['up'] else None
-    dn_l = trig['down']['level'] if trig['down'] else None
-    head = ['Month end', 'Close', 'Up trigger', 'Down trigger', 'Support', 'Resistance']
-    rows = [(d.date(), float(v), up_l, dn_l,
-             r['support']['high'] if r['support'] else None,
-             r['resistance']['low'] if r['resistance'] else None) for d, v in m.items()]
+    head = (['Month end', 'Close'] + [f'Stage {g["to"]} trigger' for g in trig]
+            + ['Support', 'Resistance'])
+    rows = [tuple([d.date(), float(v)] + [g['level'] for g in trig]
+                  + [r['support']['high'] if r['support'] else None,
+                     r['resistance']['low'] if r['resistance'] else None]) for d, v in m.items()]
     first = rr + 1
-    book.table(ws, rr, head, rows, formats={0: 'mmm yyyy', 1: PRICE, 2: PRICE, 3: PRICE,
-                                            4: PRICE, 5: PRICE})
+    book.table(ws, rr, head, rows,
+               formats={0: 'mmm yyyy', **{j: PRICE for j in range(1, len(head))}})
     if len(rows) > 2:
         ch = LineChart()
         ch.title = f'{name}, month end close'
         ch.height, ch.width = 11, 26
         ch.y_axis.title, ch.x_axis.number_format = 'Price', 'mmm yy'
-        data = Reference(ws, min_col=2, max_col=6, min_row=first - 1, max_row=first + len(rows) - 1)
+        data = Reference(ws, min_col=2, max_col=len(head), min_row=first - 1,
+                         max_row=first + len(rows) - 1)
         ch.add_data(data, titles_from_data=True)
         ch.set_categories(Reference(ws, min_col=1, min_row=first, max_row=first + len(rows) - 1))
-        for ser, colour, width, dash in zip(ch.series, (NAVY, UP, DOWN, UP, DOWN),
-                                            (28000, 19000, 19000, 12000, 12000),
-                                            (None, 'sysDot', 'sysDot', None, None)):
+        styles = ([(NAVY, 28000, None)] + [(trigger_colour(g), 19000, 'dash') for g in trig]
+                  + [(UP, 12000, None), (DOWN, 12000, None)])
+        for ser, (colour, width, dash) in zip(ch.series, styles):
             ser.graphicalProperties.line.solidFill = colour
             ser.graphicalProperties.line.width = width
             ser.smooth = False
