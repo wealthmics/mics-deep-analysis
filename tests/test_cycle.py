@@ -235,3 +235,117 @@ def test_page_and_exports_build():
     meta = {'name': 'Test Co', 'symbol': 'TEST', 'exchange': 'NYSE', 'ccy': 'USD', 'isin': None}
     assert len(cye.build_xlsx(r, meta)) > 1000
     assert len(cye.build_pptx(r, meta)) > 1000
+
+
+# ------------------------------------------------------------------ breakouts --------------
+# These drive the stage walk with hand-written weeks (close, reading), so every rule is
+# checked exactly, with no randomness. Band 1%: fail level = pivot less 1%.
+def weeks(rows, band=0.01):
+    idx = pd.date_range(end='2026-10-23', periods=len(rows), freq='W-FRI')
+    return pd.DataFrame({'close': [c for c, _ in rows], 'ma': np.nan, 'slope': np.nan,
+                         'band': band, 'raw': [r for _, r in rows]}, index=idx)
+
+
+BASE = [(100, 'neutral'), (103, 'neutral'), (101, 'neutral'), (104, 'neutral'),
+        (100, 'neutral'), (102, 'neutral'), (103, 'neutral'), (101, 'neutral'),
+        (102, 'neutral'), (103, 'neutral')]          # a base from 100 to 104
+
+
+def test_breakout_that_falls_back_is_stage_1_again():
+    df, breaks, piv = cy.sg.walk(weeks(BASE + [(105, 'up'), (106, 'up'), (101, 'neutral'),
+                                               (100, 'neutral')]))
+    assert list(df['stage']) == [1] * 11 + [2, 2, 1]
+    assert df['note'].iloc[-1] == 'breakout failed'
+    assert breaks[0]['outcome'] == 'failed' and breaks[0]['back_to'] == 1
+    assert breaks[0]['pivot'] == 104 and breaks[0]['fail'] == pytest.approx(102.96)
+    assert piv is None
+
+
+def test_breakout_proven_by_price_then_a_dip_is_a_top_not_a_failure():
+    df, breaks, _ = cy.sg.walk(weeks(BASE + [(105, 'up'), (106, 'up'), (109, 'up'),
+                                             (101, 'neutral'), (100, 'neutral')]))
+    assert breaks[0]['outcome'] == 'proven' and breaks[0]['how'] == 'price'
+    assert breaks[0]['proof'] == pytest.approx(108)          # pivot + base height of 4
+    assert df['stage'].iloc[-1] == 3
+
+
+def test_breakout_proven_by_time():
+    rows = BASE + [(105, 'up'), (106, 'up')] + [(105, 'neutral')] * 14
+    df, breaks, piv = cy.sg.walk(weeks(rows))
+    assert breaks[0]['outcome'] == 'proven' and breaks[0]['how'] == 'time'
+    assert piv is None
+    assert df['stage'].iloc[-1] == 3            # a pause after the test is a top
+    # while it was being tested, the pause did not count as a top
+    assert list(df['stage'].iloc[11:11 + cy.sg.PROVE_WEEKS]) == [2] * cy.sg.PROVE_WEEKS
+
+
+def test_small_dip_inside_the_buffer_is_not_a_failure():
+    df, breaks, piv = cy.sg.walk(weeks(BASE + [(105, 'up'), (106, 'up'), (103.5, 'neutral'),
+                                               (103.2, 'neutral')]))
+    assert df['stage'].iloc[-1] == 2
+    assert breaks[0]['outcome'] == 'testing' and piv is not None
+
+
+def test_breakout_that_turns_into_a_downtrend_has_failed():
+    df, breaks, _ = cy.sg.walk(weeks(BASE + [(105, 'up'), (106, 'up'), (103.5, 'down'),
+                                             (103.2, 'down')]))
+    assert df['stage'].iloc[-1] == 4
+    assert breaks[0]['outcome'] == 'failed' and breaks[0]['how'] == 'trend'
+
+
+TOP = [(110, 'up')] + [(c, 'neutral') for c in (104, 102, 103, 100, 101, 103, 102, 104, 101)]
+
+
+def test_breakdown_that_climbs_back_is_stage_3_again():
+    df, breaks, _ = cy.sg.walk(weeks(TOP + [(98, 'down'), (97, 'down'), (102, 'neutral'),
+                                            (103, 'neutral')]))
+    assert df['stage'].iloc[-1] == 3
+    assert df['note'].iloc[-1] == 'breakdown failed'
+    assert breaks[0]['dir'] == 'down' and breaks[0]['outcome'] == 'failed'
+
+
+def test_failed_breakout_keeps_its_range():
+    """After a failure the base is the same base: a second breakout must clear the high of
+    the failed one, not just the old pivot."""
+    rows = BASE + [(105, 'up'), (106, 'up'), (101, 'neutral'), (100, 'neutral'),
+                   (105.5, 'up'), (105.8, 'up')]
+    df, breaks, _ = cy.sg.walk(weeks(rows))
+    assert df['stage'].iloc[-1] == 1             # 105.8 is below the failed high of 106
+    df, breaks, _ = cy.sg.walk(weeks(rows + [(107, 'up')]))
+    assert df['stage'].iloc[-1] == 2 and len(breaks) == 2
+
+
+def test_direct_reversal_has_no_breakout_test():
+    """Stage 4 straight to Stage 2 has no base, so there is no pivot to fail back through."""
+    rows = [(100, 'down')] + [(c, 'down') for c in (98, 96, 94)] + [(97, 'up'), (99, 'up')]
+    df, breaks, piv = cy.sg.walk(weeks(rows))
+    assert df['stage'].iloc[-1] == 2 and breaks == [] and piv is None
+
+
+def test_breakout_test_is_shown_with_its_levels(monkeypatch):
+    """End to end: a breakout being tested appears in the reading with all three levels."""
+    rows = [(100 + (i % 4), 'neutral') for i in range(40)] + [(105, 'up'), (106, 'up')]
+    table = weeks(rows)
+    monkeypatch.setattr(cy.sg, 'frame', lambda w: table)
+    daily = table['close'].reindex(pd.bdate_range(table.index[0] - pd.Timedelta(days=4),
+                                                  table.index[-1]), method='bfill')
+    s = cy.sg.analyse(daily, table.index[-1])
+    t = s['current']['testing']
+    assert t and t['pivot'] == 103
+    o = cy.sg.outlook(s)
+    text = ' '.join(o['down'])
+    for level in ('103.00', f'{t["fail"]:,.2f}', f'{t["proof"]:,.2f}'):
+        assert level in text
+    assert 'failed breakout' in text
+
+
+def test_reading_and_card_give_the_same_distance_to_the_average():
+    import re
+    import cycle_page as cpg
+    r = cy.analyse(path([(300, 0.1), (600, 1.0)]), threshold=0.30, today=TODAY)
+    c = r['stage']['current']
+    gap = c['close'] / c['ma'] - 1
+    text = ' '.join(r['outlook']['now'])
+    assert f'{abs(gap) * 100:.1f}% above the 30-week average' in text
+    card = re.sub('<[^>]+>', '|', cpg.now_card(r))
+    assert f'{gap * 100:+.1f}%'.replace('-', '\u2212') in card
